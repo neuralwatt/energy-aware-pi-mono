@@ -4,6 +4,8 @@ Well its essentially making decisions based on the energy & power constriants in
 Pi coding agent to make semantic model routing decisions based on the expected energy/performance tradeoff of that action.  There are many 
 other examples we've outlined here: [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md).
 
+The actual per-request energy values come from the Neuralwatt AI model platform here: [https://portal.neuralwatt.com/]
+
 This is what the demo energy-aware coding agent looks like in action:
 <img width="1717" height="1492" alt="EADemo" src="https://github.com/user-attachments/assets/da7b32ae-7eaa-4146-b5f6-96905d4adb4f" />
 
