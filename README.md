@@ -2,7 +2,8 @@
 This is a hard fork of the Pi monorepo where we are baking in the concept of energy-awareness to agents.  What's energy-awareness? 
 Well its essentially making decisions based on the energy & power constriants in your envioronment.  For example we have extending the 
 Pi coding agent to make semantic model routing decisions based on the expected energy/performance tradeoff of that action.  There are many 
-other examples we've outlined below. 
+other examples we've outlined here: [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md).
+
 
 ## Contributing
 
