@@ -1,52 +1,16 @@
 import { parseArgs } from "node:util";
 import { BaselinePolicy } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import { getModels, type Model } from "@mariozechner/pi-ai";
 import { runSuite } from "./runner.js";
 import { getTasksByGlob } from "./tasks.js";
 import type { RunConfig } from "./types.js";
 
 /**
- * Hard-coded Neuralwatt model definitions for initial benchmarking.
- * Sorted by cost.output ascending (cheapest first).
+ * Neuralwatt models from the generated registry, sorted by cost.output ascending.
  */
-const NEURALWATT_MODELS: Model<"openai-completions">[] = [
-	{
-		id: "neuralwatt-mini",
-		name: "Neuralwatt Mini",
-		api: "openai-completions",
-		provider: "neuralwatt",
-		baseUrl: "https://api.neuralwatt.com/v1",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0.1, output: 0.3, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 32_000,
-		maxTokens: 4_096,
-	},
-	{
-		id: "neuralwatt-standard",
-		name: "Neuralwatt Standard",
-		api: "openai-completions",
-		provider: "neuralwatt",
-		baseUrl: "https://api.neuralwatt.com/v1",
-		reasoning: false,
-		input: ["text", "image"],
-		cost: { input: 1.0, output: 3.0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128_000,
-		maxTokens: 8_192,
-	},
-	{
-		id: "neuralwatt-large",
-		name: "Neuralwatt Large",
-		api: "openai-completions",
-		provider: "neuralwatt",
-		baseUrl: "https://api.neuralwatt.com/v1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 3.0, output: 15.0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 200_000,
-		maxTokens: 16_384,
-	},
-];
+const NEURALWATT_MODELS: Model<"openai-completions">[] = (
+	getModels("neuralwatt") as Model<"openai-completions">[]
+).sort((a, b) => a.cost.output - b.cost.output);
 
 function printUsage(): void {
 	console.log(`Usage: bench run [options]

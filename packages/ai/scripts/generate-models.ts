@@ -1245,6 +1245,62 @@ async function generateModels() {
 	];
 	allModels.push(...vertexModels);
 
+	// Neuralwatt models — fetched from the portal API
+	try {
+		console.log("Fetching models from Neuralwatt portal...");
+		const nwResponse = await fetch("https://portal.neuralwatt.com/api/models");
+		const nwData = (await nwResponse.json()) as {
+			models: {
+				id: string;
+				name: string;
+				provider: string;
+				context_length: number;
+				prompt_price_per_1k: number;
+				completion_price_per_1k: number;
+				supports_tools: boolean;
+				supports_vision: boolean;
+				supports_reasoning: boolean;
+			}[];
+		};
+		for (const m of nwData.models) {
+			const capabilities: string[] = [];
+			if (m.supports_tools) capabilities.push("tool_calling");
+			if (m.supports_reasoning) capabilities.push("reasoning");
+			if (m.supports_vision) capabilities.push("vision");
+
+			allModels.push({
+				id: m.id,
+				name: m.name,
+				api: "openai-completions",
+				provider: "neuralwatt",
+				baseUrl: "https://api.neuralwatt.com/v1",
+				reasoning: m.supports_reasoning,
+				input: m.supports_vision ? ["text", "image"] : ["text"],
+				cost: {
+					// Portal prices are $/1K tokens, Model type uses $/million tokens
+					input: m.prompt_price_per_1k * 1000,
+					output: m.completion_price_per_1k * 1000,
+					cacheRead: 0,
+					cacheWrite: 0,
+				},
+				contextWindow: m.context_length,
+				// Conservative default; vLLM models typically support 8-16K output
+				maxTokens: m.context_length >= 200_000 ? 16_384 : 8_192,
+				capabilities,
+				compat: {
+					supportsStore: false,
+					supportsDeveloperRole: false,
+					supportsReasoningEffort: false,
+					maxTokensField: "max_tokens",
+					supportsStrictMode: false,
+				},
+			} as Model<any>);
+		}
+		console.log(`  Fetched ${nwData.models.length} Neuralwatt models`);
+	} catch (err) {
+		console.warn("  Failed to fetch Neuralwatt models (non-fatal):", err);
+	}
+
 	// Kimi For Coding models (Moonshot AI's Anthropic-compatible coding API)
 	// Static fallback in case models.dev doesn't have them yet
 	const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding";
@@ -1347,6 +1403,9 @@ export const MODELS = {
 			output += `\t\t\t},\n`;
 			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
+			if (model.capabilities && model.capabilities.length > 0) {
+				output += `\t\t\tcapabilities: [${model.capabilities.map((c: string) => `"${c}"`).join(", ")}],\n`;
+			}
 			output += `\t\t} satisfies Model<"${model.api}">,\n`;
 		}
 

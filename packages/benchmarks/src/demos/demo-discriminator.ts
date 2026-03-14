@@ -90,6 +90,9 @@ export interface RoutingDecision {
 export interface DiscriminateOptions {
 	/** Required model capabilities. If set, the resolved tier's model must support all of them. */
 	requires?: ModelCapability[];
+	/** Minimum tier floor. If set, the classifier's result is clamped upward to at least this tier.
+	 *  Tier order (low→high): simple < medium < complex < thinking. */
+	minTier?: DiscriminatorTier;
 }
 
 // -- Default system prompt ----------------------------------------------------
@@ -235,10 +238,15 @@ export async function discriminate(
 		}
 
 		const VALID_TIERS: DiscriminatorTier[] = ["thinking", "complex", "medium", "simple"];
+		const TIER_RANK: Record<DiscriminatorTier, number> = { simple: 0, medium: 1, complex: 2, thinking: 3 };
 		const rawTier = typeof parsed.tier === "string" ? parsed.tier : "complex";
-		const tier: DiscriminatorTier = (VALID_TIERS as string[]).includes(rawTier)
+		let tier: DiscriminatorTier = (VALID_TIERS as string[]).includes(rawTier)
 			? (rawTier as DiscriminatorTier)
 			: "complex";
+		// Clamp upward to minTier if specified
+		if (options?.minTier && TIER_RANK[tier] < TIER_RANK[options.minTier]) {
+			tier = options.minTier;
+		}
 
 		const requires = options?.requires ?? [];
 		const { resolvedTier, tierConfig } =
