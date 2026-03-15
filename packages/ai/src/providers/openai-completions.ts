@@ -311,6 +311,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 
 			finishCurrentBlock(currentBlock);
 
+			// Read captured energy telemetry from SSE comment lines
+			const energyCapture = (client as any).__energyCapture as { data?: Record<string, unknown> } | undefined;
+			if (energyCapture?.data && !output.energy) {
+				const ed = energyCapture.data;
+				const ej = typeof ed.energy_joules === "number" ? ed.energy_joules : undefined;
+				const ekwh = typeof ed.energy_kwh === "number" ? ed.energy_kwh : undefined;
+				const ds = typeof ed.duration_seconds === "number" ? ed.duration_seconds : undefined;
+				if (ej !== undefined || ekwh !== undefined) {
+					output.energy = {
+						energy_joules: ej ?? (ekwh !== undefined ? ekwh * 3_600_000 : 0),
+						energy_kwh: ekwh ?? (ej !== undefined ? ej / 3_600_000 : 0),
+						duration_seconds: ds ?? 0,
+					};
+				}
+			}
+
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
@@ -387,12 +403,72 @@ function createClient(
 		Object.assign(headers, optionsHeaders);
 	}
 
-	return new OpenAI({
+	// Use a custom fetch wrapper that intercepts SSE comment lines
+	// to capture energy telemetry (e.g., `: energy {...}` from Neuralwatt).
+	// The OpenAI SDK strips SSE comments, so we intercept the raw stream
+	// via a TransformStream that passes all data through while scanning
+	// for energy comment lines.
+	const energyCapture: { data?: Record<string, unknown> } = {};
+	const wrappedFetch: typeof globalThis.fetch = async (input, init) => {
+		const response = await globalThis.fetch(input, init);
+
+		const contentType = response.headers.get("content-type") || "";
+		if (!contentType.includes("text/event-stream") || !response.body) {
+			return response;
+		}
+
+		let buffer = "";
+		const decoder = new TextDecoder();
+		const transform = new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				// Pass the chunk through unmodified for the SDK
+				controller.enqueue(chunk);
+
+				// Also scan it for energy comment lines
+				buffer += decoder.decode(chunk, { stream: true });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() || "";
+				for (const line of lines) {
+					if (line.startsWith(": energy ")) {
+						try {
+							energyCapture.data = JSON.parse(line.substring(": energy ".length));
+						} catch {
+							// Ignore parse errors
+						}
+					}
+				}
+			},
+			flush() {
+				// Check any remaining buffer
+				if (buffer.startsWith(": energy ")) {
+					try {
+						energyCapture.data = JSON.parse(buffer.substring(": energy ".length));
+					} catch {
+						// Ignore
+					}
+				}
+			},
+		});
+
+		const pipedBody = response.body.pipeThrough(transform);
+
+		return new Response(pipedBody, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	};
+
+	const client = new OpenAI({
 		apiKey,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: headers,
+		fetch: wrappedFetch,
 	});
+
+	(client as any).__energyCapture = energyCapture;
+	return client;
 }
 
 function buildParams(model: Model<"openai-completions">, context: Context, options?: OpenAICompletionsOptions) {
