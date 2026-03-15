@@ -1,10 +1,8 @@
 /**
  * Task Agent Demo Runner
  *
- * Runs an LLM agent against one of three demo problem domains:
- * - scheduling: Conference scheduling (constraint satisfaction)
- * - code-from-tests: Write code that passes a test suite (iterative refinement)
- * - data-pipeline: Data transformation synthesis (decomposition + composition)
+ * Runs an LLM agent against one of three demo problem domains with
+ * energy-aware policy that routes between cheap and expensive models.
  *
  * Usage:
  *   npx tsx demo.ts scheduling [small|medium|hard]
@@ -13,12 +11,14 @@
  *
  * Environment:
  *   NEURALWATT_API_KEY  Required
- *   DEMO_MODEL          Model ID (default: mistralai/Devstral-Small-2-24B-Instruct-2512)
+ *   DEMO_MODEL          Primary model (default: Qwen/Qwen3.5-397B-A17B-FP8)
+ *   CHEAP_MODEL         Cheap model for routing (default: openai/gpt-oss-20b)
+ *   ENERGY_BUDGET       Energy budget in joules (default: 5000)
  */
 
 // @ts-nocheck — demo script, cross-package source imports bypass tsgo
-import { agentLoop } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+import { agentLoop, EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+import { getModel, getModels } from "@mariozechner/pi-ai";
 import { ProcessSandbox } from "./src/sandbox/process-sandbox.js";
 import { createRecordLessonTool, createRecordStrategyTool } from "./src/tools/record.js";
 import { createRunCodeTool } from "./src/tools/run-code.js";
@@ -41,35 +41,53 @@ const R = "\x1b[31m";
 const Y = "\x1b[33m";
 const C = "\x1b[36m";
 const M = "\x1b[35m";
-const W = "\x1b[37m";
 const X = "\x1b[0m";
 
-// Box-drawing characters for the strategy tree
-const VERT = "\u2502";   // |
-const BRANCH = "\u251c";  // |-
-const CORNER = "\u2514";  // L
-const HORIZ = "\u2500";   // -
-const DOT = "\u25cf";     // filled circle
-const RING = "\u25cb";    // empty circle
-const ARROW = "\u2192";   // ->
-const CHECK = "\u2714";   // checkmark
-const CROSS = "\u2718";   // X
+const VERT = "\u2502";
+const BRANCH = "\u251c";
+const CORNER = "\u2514";
+const HORIZ = "\u2500";
+const DOT = "\u25cf";
+const RING = "\u25cb";
+const ARROW = "\u2192";
+const CHECK = "\u2714";
+const CROSS = "\u2718";
+const BOLT = "\u26a1";
 
 function boxTop(title) {
-	const w = 70;
+	const w = 72;
 	const pad = Math.max(0, w - title.length - 4);
-	return `${C}${"\u250c"}${"\u2500".repeat(2)} ${B}${title}${X}${C} ${"\u2500".repeat(pad)}${"\u2510"}${X}`;
+	return `${C}\u250c\u2500\u2500 ${B}${title}${X}${C} ${"\u2500".repeat(pad)}\u2510${X}`;
 }
 
 function boxMid(text) {
-	const w = 70;
+	const w = 72;
 	const visible = text.replace(/\x1b\[[0-9;]*m/g, "");
 	const pad = Math.max(0, w - visible.length - 2);
 	return `${C}${VERT}${X} ${text}${" ".repeat(pad)}${C}${VERT}${X}`;
 }
 
 function boxBot() {
-	return `${C}${"\u2514"}${"\u2500".repeat(71)}${"\u2518"}${X}`;
+	return `${C}\u2514${"\u2500".repeat(73)}\u2518${X}`;
+}
+
+function energyBar(consumed, budget) {
+	const pct = Math.min(1, consumed / budget);
+	const width = 20;
+	const filled = Math.round(pct * width);
+	const bar = "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
+	const color = pct < 0.5 ? G : pct < 0.8 ? Y : R;
+	return `${color}${bar}${X} ${(pct * 100).toFixed(0)}%`;
+}
+
+function shortModelName(modelId) {
+	const parts = modelId.split("/");
+	const name = parts[parts.length - 1];
+	// Shorten common suffixes
+	return name
+		.replace(/-Instruct-\d+$/, "")
+		.replace(/-FP8$/, "")
+		.replace(/Small-2-24B/, "24B");
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +100,9 @@ class StrategyTree {
 		this.currentIdx = -1;
 		this.validationCount = 0;
 		this.codeRunCount = 0;
+		this.modelSwitches = [];
+		this.totalEnergy = 0;
+		this.energyBudget = 0;
 	}
 
 	startStrategy(name, approach) {
@@ -121,9 +142,19 @@ class StrategyTree {
 		this.codeRunCount++;
 	}
 
+	recordModelUsage(modelId, energy, reason) {
+		this.totalEnergy += energy || 0;
+		const last = this.modelSwitches[this.modelSwitches.length - 1];
+		if (!last || last.model !== modelId) {
+			this.modelSwitches.push({ model: modelId, reason, energy });
+			return true; // switched
+		}
+		return false; // same model
+	}
+
 	_indent() {
 		const depth = this.currentIdx;
-		return "  ".repeat(Math.min(depth, 3));
+		return "  ".repeat(Math.min(depth, 4));
 	}
 
 	_renderStrategyStart() {
@@ -153,7 +184,7 @@ class StrategyTree {
 				console.log(`${indent}${C}${VERT}${X}   ${D}${prefix}${HORIZ} ${v.substring(0, 80)}${X}`);
 			}
 			if (a.violations.length > maxShow) {
-				console.log(`${indent}${C}${VERT}${X}   ${D}  ...and ${a.violations.length - maxShow} more violations${X}`);
+				console.log(`${indent}${C}${VERT}${X}   ${D}  ...and ${a.violations.length - maxShow} more${X}`);
 			}
 		}
 	}
@@ -172,6 +203,8 @@ class StrategyTree {
 
 	renderSummary(totalCalls, totalTokens, durationMs) {
 		console.log("");
+
+		// Strategy tree
 		console.log(boxTop("Strategy Tree"));
 		for (let i = 0; i < this.strategies.length; i++) {
 			const s = this.strategies[i];
@@ -185,15 +218,42 @@ class StrategyTree {
 				console.log(boxMid(`${cont}    ${D}Lesson: ${s.lesson.substring(0, 55)}${X}`));
 			}
 		}
-		console.log(boxMid(""));
-		console.log(boxMid(`${D}Strategies: ${this.strategies.length}  Code runs: ${this.codeRunCount}  Validations: ${this.validationCount}${X}`));
-		console.log(boxMid(`${D}Turns: ${totalCalls}  Tokens: ${totalTokens}  Time: ${(durationMs / 1000).toFixed(1)}s${X}`));
+		console.log(boxBot());
+
+		// Energy & model routing
+		if (this.modelSwitches.length > 0 || this.energyBudget > 0) {
+			console.log("");
+			console.log(boxTop(`${BOLT} Energy & Model Routing`));
+			if (this.energyBudget > 0) {
+				console.log(boxMid(`Budget:   ${energyBar(this.totalEnergy, this.energyBudget)} ${this.totalEnergy.toFixed(0)}J / ${this.energyBudget}J`));
+			}
+			if (this.modelSwitches.length > 0) {
+				console.log(boxMid(""));
+				console.log(boxMid(`${D}Model routing decisions:${X}`));
+				for (const sw of this.modelSwitches) {
+					const name = shortModelName(sw.model);
+					const reason = sw.reason ? ` ${D}(${sw.reason})${X}` : "";
+					console.log(boxMid(`  ${M}${ARROW}${X} ${B}${name}${X}${reason}`));
+				}
+			}
+			console.log(boxBot());
+		}
+
+		// Stats
+		console.log("");
+		console.log(boxTop("Stats"));
+		console.log(boxMid(`Strategies: ${this.strategies.length}  Code runs: ${this.codeRunCount}  Validations: ${this.validationCount}`));
+		console.log(boxMid(`Turns: ${totalCalls}  Tokens: ${totalTokens}  Time: ${(durationMs / 1000).toFixed(1)}s`));
+		if (this.modelSwitches.length > 1) {
+			const models = [...new Set(this.modelSwitches.map((s) => shortModelName(s.model)))];
+			console.log(boxMid(`Models used: ${models.join(", ")}`));
+		}
 		console.log(boxBot());
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Problem setup
+// Problem setup (unchanged)
 // ---------------------------------------------------------------------------
 
 function setupSchedulingProblem(difficulty) {
@@ -295,7 +355,7 @@ function defaultConvertToLlm(messages) {
 	return messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
 
-async function runDemo(demoProblem, modelId) {
+async function runDemo(demoProblem, modelId, cheapModelId, energyBudget) {
 	const apiKey = process.env.NEURALWATT_API_KEY;
 	if (!apiKey) {
 		console.error("NEURALWATT_API_KEY required");
@@ -303,15 +363,24 @@ async function runDemo(demoProblem, modelId) {
 	}
 
 	const model = getModel("neuralwatt", modelId);
+	const cheapModel = getModel("neuralwatt", cheapModelId);
+
+	// Gather all available neuralwatt models for the policy to route between
+	const availableModels = getModels("neuralwatt");
+
+	// Set up energy-aware policy
+	const policy = new EnergyAwarePolicy();
 
 	// Header
 	console.log("");
 	console.log(boxTop(demoProblem.name));
-	console.log(boxMid(`${D}Model: ${model.name} (${model.id})${X}`));
-	console.log(boxMid(`${D}Task:  ${demoProblem.task.substring(0, 65)}...${X}`));
+	console.log(boxMid(`${D}Primary: ${B}${shortModelName(model.id)}${X}${D}  Cheap: ${B}${shortModelName(cheapModel.id)}${X}`));
+	console.log(boxMid(`${D}Budget:  ${energyBudget}J  Policy: energy-aware (5-stage)${X}`));
+	console.log(boxMid(`${D}Task:    ${demoProblem.task.substring(0, 62)}...${X}`));
 	console.log(boxBot());
 
 	const tree = new StrategyTree();
+	tree.energyBudget = energyBudget;
 
 	// Build tools
 	const sandbox = new ProcessSandbox();
@@ -362,12 +431,16 @@ Follow this cycle:
 		convertToLlm: defaultConvertToLlm,
 		apiKey,
 		maxTokens: 4096,
+		policy,
+		budget: { energy_budget_joules: energyBudget },
+		availableModels,
 	};
 
 	const startTime = performance.now();
 	let totalCalls = 0;
 	let totalTokens = 0;
 	let solved = false;
+	let lastModelId = model.id;
 
 	console.log(`\n${D}Agent thinking...${X}`);
 
@@ -381,7 +454,25 @@ Follow this cycle:
 
 			case "message_end":
 				if (event.message.role === "assistant") {
-					totalTokens += event.message.usage?.totalTokens ?? 0;
+					const msg = event.message;
+					totalTokens += msg.usage?.totalTokens ?? 0;
+					const energy = msg.energy?.energy_joules || 0;
+					const usedModel = msg.model || lastModelId;
+
+					// Detect model switch
+					const switched = tree.recordModelUsage(usedModel, energy, null);
+					if (switched && usedModel !== lastModelId) {
+						const indent = tree._indent();
+						const pressure = tree.energyBudget > 0 ? (tree.totalEnergy / tree.energyBudget * 100).toFixed(0) : "?";
+						console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Model: ${B}${shortModelName(lastModelId)}${X} ${M}${ARROW}${X} ${B}${shortModelName(usedModel)}${X} ${D}(pressure: ${pressure}%)${X}`);
+						lastModelId = usedModel;
+					}
+
+					// Check for policy abort
+					if (msg.stopReason === "aborted") {
+						const indent = tree._indent();
+						console.log(`${indent}${C}${VERT}${X} ${R}${BOLT} Budget exhausted — policy aborted${X}`);
+					}
 				}
 				break;
 
@@ -392,14 +483,12 @@ Follow this cycle:
 					.join("");
 
 				if (event.toolName === "record_strategy") {
-					// Extract strategy name from the tool args
 					const s = strategies[strategies.length - 1];
 					if (s) {
 						tree.startStrategy(s.strategy.name, s.strategy.approach);
 					}
 				} else if (event.toolName === "run_code") {
 					tree.recordCodeRun();
-					// Show a brief indicator
 					const exitMatch = resultText.match(/exit_code: (\d+)/);
 					const exitCode = exitMatch ? parseInt(exitMatch[1]) : -1;
 					const indent = tree._indent();
@@ -411,7 +500,6 @@ Follow this cycle:
 					const scoreMatch = resultText.match(/Score: ([\d.]+)/);
 					const score = scoreMatch ? parseFloat(scoreMatch[1]) : undefined;
 
-					// Extract violations
 					const violations = [];
 					const violationLines = resultText.split("\n").filter((l) => l.trim().startsWith("- "));
 					for (const vl of violationLines) {
@@ -435,8 +523,6 @@ Follow this cycle:
 	}
 
 	const durationMs = Math.round(performance.now() - startTime);
-
-	// Final summary with strategy tree
 	tree.renderSummary(totalCalls, totalTokens, durationMs);
 
 	const statusIcon = solved ? `${G}${B}SOLVED ${CHECK}${X}` : `${R}${B}FAILED ${CROSS}${X}`;
@@ -449,9 +535,11 @@ Follow this cycle:
 
 const [, , domain, variant] = process.argv;
 const modelId = process.env.DEMO_MODEL || "mistralai/Devstral-Small-2-24B-Instruct-2512";
+const cheapModelId = process.env.CHEAP_MODEL || "openai/gpt-oss-20b";
+const energyBudget = parseInt(process.env.ENERGY_BUDGET || "5000", 10);
 
 if (!domain || !["scheduling", "code-from-tests", "data-pipeline"].includes(domain)) {
-	console.log(`\n${B}Task Agent Demo${X}\n`);
+	console.log(`\n${B}Task Agent Demo${X} ${D}(energy-aware)${X}\n`);
 	console.log(`Usage: npx tsx demo.ts ${C}<domain>${X} ${D}[variant]${X}\n`);
 	console.log(`Domains:`);
 	console.log(`  ${C}scheduling${X}      ${D}[small|medium|hard]${X}       Constraint satisfaction`);
@@ -460,7 +548,9 @@ if (!domain || !["scheduling", "code-from-tests", "data-pipeline"].includes(doma
 	console.log(`  ${C}data-pipeline${X}   ${D}[easy|medium|hard]${X}        Decomposition + composition`);
 	console.log(`\nEnvironment:`);
 	console.log(`  ${Y}NEURALWATT_API_KEY${X}  Required`);
-	console.log(`  ${D}DEMO_MODEL${X}          Model ID (default: Devstral-24B)`);
+	console.log(`  ${D}DEMO_MODEL${X}          Primary model    (default: Devstral-24B)`);
+	console.log(`  ${D}CHEAP_MODEL${X}         Cheap model      (default: gpt-oss-20b)`);
+	console.log(`  ${D}ENERGY_BUDGET${X}       Budget in joules (default: 5000)`);
 	console.log("");
 	process.exit(1);
 }
@@ -480,7 +570,7 @@ switch (domain) {
 		throw new Error(`Unknown domain: ${domain}`);
 }
 
-runDemo(problem, modelId).catch((err) => {
+runDemo(problem, modelId, cheapModelId, energyBudget).catch((err) => {
 	console.error("Demo failed:", err);
 	process.exit(1);
 });
