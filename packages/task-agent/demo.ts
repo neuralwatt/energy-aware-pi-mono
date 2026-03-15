@@ -356,15 +356,16 @@ function defaultConvertToLlm(messages) {
 }
 
 /**
- * Escalation Policy: starts with the cheap model, escalates to bigger
- * models when strategies fail. Never aborts — just tracks energy.
+ * Escalation Policy: starts with a mid-tier model and escalates to
+ * bigger models when strategies fail. Never aborts.
  *
- * Model ladder (sorted by capability, cheapest first):
- *   gpt-oss-20b → Devstral-24B → Qwen3.5-397B → Kimi K2.5
+ * Model ladder (sorted by capability):
+ *   Devstral-24B → Qwen3.5-397B → Kimi K2.5
+ *
+ * gpt-oss-20b is excluded — too weak to use tools reliably.
  */
 function buildModelLadder() {
 	const ids = [
-		"openai/gpt-oss-20b",
 		"mistralai/Devstral-Small-2-24B-Instruct-2512",
 		"Qwen/Qwen3.5-397B-A17B-FP8",
 		"moonshotai/Kimi-K2.5",
@@ -594,7 +595,7 @@ if (!domain || !["scheduling", "code-from-tests", "data-pipeline"].includes(doma
 	console.log(`                                                 Iterative refinement`);
 	console.log(`  ${C}data-pipeline${X}   ${D}[easy|medium|hard]${X}        Decomposition + composition`);
 	console.log(`\nModel ladder (escalates on backtrack):`);
-	console.log(`  ${D}gpt-oss-20b ${ARROW} Devstral-24B ${ARROW} Qwen3.5-397B ${ARROW} Kimi-K2.5${X}`);
+	console.log(`  ${D}Devstral-24B ${ARROW} Qwen3.5-397B ${ARROW} Kimi-K2.5${X}`);
 	console.log(`\nEnvironment:`);
 	console.log(`  ${Y}NEURALWATT_API_KEY${X}  Required`);
 	console.log("");
