@@ -267,21 +267,21 @@ describe("generateProblem", () => {
 		const p = generateProblem("small");
 		expect(p.talks).toHaveLength(5);
 		expect(p.rooms).toHaveLength(2);
-		expect(p.time_slots).toHaveLength(4);
+		expect(p.time_slots).toHaveLength(3);
 	});
 
 	it("medium has expected counts", () => {
 		const p = generateProblem("medium");
-		expect(p.talks).toHaveLength(20);
-		expect(p.rooms).toHaveLength(5);
-		expect(p.time_slots).toHaveLength(8);
+		expect(p.talks).toHaveLength(15);
+		expect(p.rooms).toHaveLength(4);
+		expect(p.time_slots).toHaveLength(5);
 	});
 
 	it("hard has expected counts", () => {
 		const p = generateProblem("hard");
-		expect(p.talks).toHaveLength(50);
-		expect(p.rooms).toHaveLength(10);
-		expect(p.time_slots).toHaveLength(12);
+		expect(p.talks).toHaveLength(30);
+		expect(p.rooms).toHaveLength(5);
+		expect(p.time_slots).toHaveLength(7);
 	});
 
 	it("is deterministic", () => {

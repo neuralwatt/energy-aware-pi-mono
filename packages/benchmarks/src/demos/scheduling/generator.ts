@@ -159,79 +159,6 @@ function makeTimeSlots(count: number): TimeSlot[] {
 	return slots;
 }
 
-function makeConstraints(talks: Talk[], _rooms: Room[], timeSlots: TimeSlot[], targetCount: number): Constraint[] {
-	const constraints: Constraint[] = [];
-
-	// Speaker conflicts: find speakers with multiple talks
-	const speakerTalks = new Map<string, string[]>();
-	for (const t of talks) {
-		const list = speakerTalks.get(t.speaker_id) ?? [];
-		list.push(t.id);
-		speakerTalks.set(t.speaker_id, list);
-	}
-
-	for (const [speakerId, talkIds] of speakerTalks) {
-		if (talkIds.length > 1 && constraints.length < targetCount) {
-			constraints.push({
-				type: "speaker_conflict",
-				speaker_id: speakerId,
-				description: `Speaker ${speakerId} has ${talkIds.length} talks and cannot be in two places at once`,
-			});
-		}
-	}
-
-	// Room requirements
-	for (let i = 0; i < talks.length && constraints.length < targetCount; i += 3) {
-		const eqIdx = (i / 3) % EQUIPMENT_OPTIONS.length;
-		constraints.push({
-			type: "room_requirement",
-			talk_id: talks[i].id,
-			equipment: [EQUIPMENT_OPTIONS[eqIdx]],
-		});
-	}
-
-	// Capacity constraints
-	for (let i = 1; i < talks.length && constraints.length < targetCount; i += 4) {
-		constraints.push({
-			type: "capacity",
-			talk_id: talks[i].id,
-			expected_attendees: [40, 80, 150, 250][i % 4],
-		});
-	}
-
-	// Sequence constraints
-	for (let i = 0; i + 1 < talks.length && constraints.length < targetCount; i += 5) {
-		constraints.push({
-			type: "sequence",
-			first_talk_id: talks[i].id,
-			then_talk_id: talks[i + 1].id,
-		});
-	}
-
-	// No-overlap constraints
-	for (let i = 0; i + 2 < talks.length && constraints.length < targetCount; i += 7) {
-		constraints.push({
-			type: "no_overlap",
-			talk_ids: [talks[i].id, talks[i + 1].id, talks[i + 2].id],
-		});
-	}
-
-	// Time preferences (soft)
-	for (let i = 2; i < talks.length && constraints.length < targetCount; i += 4) {
-		const prefSlots = [timeSlots[i % timeSlots.length].id];
-		if (timeSlots.length > 1) {
-			prefSlots.push(timeSlots[(i + 1) % timeSlots.length].id);
-		}
-		constraints.push({
-			type: "time_preference",
-			talk_id: talks[i].id,
-			preferred_slots: prefSlots,
-		});
-	}
-
-	return constraints;
-}
-
 function buildDescription(talks: Talk[], rooms: Room[], timeSlots: TimeSlot[], constraints: Constraint[]): string {
 	const hardConstraints = constraints.filter((c) => c.type !== "time_preference");
 	const softConstraints = constraints.filter((c) => c.type === "time_preference");
@@ -247,19 +174,89 @@ function buildDescription(talks: Talk[], rooms: Room[], timeSlots: TimeSlot[], c
 }
 
 /**
- * Generate a deterministic scheduling problem of the given difficulty.
+ * Build a tight scheduling problem where speakers each give multiple talks,
+ * rooms have limited/specific equipment, and capacity is restrictive.
+ * The slot-to-talk ratio is low enough that naive greedy approaches fail.
  */
-export function generateProblem(difficulty: "small" | "medium" | "hard"): SchedulingProblem {
-	const config = {
-		small: { talks: 5, rooms: 2, slots: 4, constraints: 3 },
-		medium: { talks: 20, rooms: 5, slots: 8, constraints: 15 },
-		hard: { talks: 50, rooms: 10, slots: 12, constraints: 40 },
-	}[difficulty];
+function generateTightProblem(talkCount: number, roomCount: number, slotCount: number): SchedulingProblem {
+	// Fewer speakers than talks so each speaker has multiple talks (forces conflicts)
+	const speakerCount = Math.max(3, Math.floor(talkCount / 3));
+	const talks = makeTalks(talkCount);
+	// Reassign speakers so they're denser: speaker i gets talks i, i+speakerCount, i+2*speakerCount...
+	for (let i = 0; i < talks.length; i++) {
+		talks[i].speaker_id = `speaker-${(i % speakerCount) + 1}`;
+	}
 
-	const talks = makeTalks(config.talks);
-	const rooms = makeRooms(config.rooms);
-	const time_slots = makeTimeSlots(config.slots);
-	const constraints = makeConstraints(talks, rooms, time_slots, config.constraints);
+	const rooms = makeRooms(roomCount);
+	// Make rooms more restrictive: halve capacities, vary equipment more
+	for (let i = 0; i < rooms.length; i++) {
+		rooms[i].capacity = [30, 50, 40, 80, 60, 35, 45, 70, 100, 25][i % 10];
+	}
+
+	const time_slots = makeTimeSlots(slotCount);
+	const constraints: Constraint[] = [];
+
+	// Speaker conflicts (dense — every speaker with 2+ talks)
+	const speakerTalks = new Map<string, string[]>();
+	for (const t of talks) {
+		const list = speakerTalks.get(t.speaker_id) ?? [];
+		list.push(t.id);
+		speakerTalks.set(t.speaker_id, list);
+	}
+	for (const [speakerId, talkIds] of speakerTalks) {
+		if (talkIds.length > 1) {
+			constraints.push({
+				type: "speaker_conflict",
+				speaker_id: speakerId,
+				description: `Speaker ${speakerId} has ${talkIds.length} talks and cannot present simultaneously`,
+			});
+		}
+	}
+
+	// Room requirements — many talks need specific equipment
+	for (let i = 0; i < talks.length; i += 2) {
+		const eqIdx = i % EQUIPMENT_OPTIONS.length;
+		constraints.push({
+			type: "room_requirement",
+			talk_id: talks[i].id,
+			equipment: [EQUIPMENT_OPTIONS[eqIdx]],
+		});
+	}
+
+	// Capacity constraints — high attendance expectations vs small rooms
+	for (let i = 0; i < talks.length; i += 3) {
+		constraints.push({
+			type: "capacity",
+			talk_id: talks[i].id,
+			expected_attendees: [25, 45, 70, 35, 55][i % 5],
+		});
+	}
+
+	// Sequence constraints — chains of talks that must be ordered
+	for (let i = 0; i + 1 < talks.length; i += 4) {
+		constraints.push({
+			type: "sequence",
+			first_talk_id: talks[i].id,
+			then_talk_id: talks[i + 1].id,
+		});
+	}
+
+	// No-overlap — groups of talks that can't share a time slot
+	for (let i = 0; i + 2 < talks.length; i += 5) {
+		constraints.push({
+			type: "no_overlap",
+			talk_ids: [talks[i].id, talks[i + 1].id, talks[i + 2].id],
+		});
+	}
+
+	// Time preferences (soft)
+	for (let i = 2; i < talks.length; i += 6) {
+		constraints.push({
+			type: "time_preference",
+			talk_id: talks[i].id,
+			preferred_slots: [time_slots[0].id],
+		});
+	}
 
 	return {
 		talks,
@@ -268,4 +265,22 @@ export function generateProblem(difficulty: "small" | "medium" | "hard"): Schedu
 		constraints,
 		description: buildDescription(talks, rooms, time_slots, constraints),
 	};
+}
+
+/**
+ * Generate a deterministic scheduling problem of the given difficulty.
+ *
+ * - small: 5 talks, 2 rooms, 3 slots (6 capacity, tight)
+ * - medium: 15 talks, 4 rooms, 5 slots (20 capacity, constrained)
+ * - hard: 30 talks, 5 rooms, 7 slots (35 capacity for 30 talks, very tight)
+ */
+export function generateProblem(difficulty: "small" | "medium" | "hard"): SchedulingProblem {
+	switch (difficulty) {
+		case "small":
+			return generateTightProblem(5, 2, 3);
+		case "medium":
+			return generateTightProblem(15, 4, 5);
+		case "hard":
+			return generateTightProblem(30, 5, 7);
+	}
 }
