@@ -1,0 +1,45 @@
+{
+	"name": "@neuralwatt/pi-task-agent",
+	"version": "0.53.0",
+	"description": "General-purpose task agent with recursive decomposition, sandbox execution, and energy-aware policy",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@mariozechner/pi-ai": "npm:@neuralwatt/pi-ai@*",
+		"@mariozechner/pi-agent-core": "npm:@neuralwatt/pi-agent-core@*"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"task",
+		"decomposition",
+		"energy-aware"
+	],
+	"author": "Scott",
+	"license": "MIT",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"publishConfig": {
+		"registry": "https://npm.pkg.github.com",
+		"access": "public"
+	},
+	"devDependencies": {
+		"@sinclair/typebox": "^0.34.41",
+		"@types/node": "^24.3.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.2.4"
+	}
+}
