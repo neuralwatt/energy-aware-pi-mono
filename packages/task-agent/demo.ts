@@ -17,7 +17,7 @@
  */
 
 // @ts-nocheck — demo script, cross-package source imports bypass tsgo
-import { agentLoop, EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+import { agentLoop } from "@mariozechner/pi-agent-core";
 import { getModel, getModels } from "@mariozechner/pi-ai";
 import { ProcessSandbox } from "./src/sandbox/process-sandbox.js";
 import { createRecordLessonTool, createRecordStrategyTool } from "./src/tools/record.js";
@@ -355,32 +355,81 @@ function defaultConvertToLlm(messages) {
 	return messages.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
 }
 
-async function runDemo(demoProblem, modelId, cheapModelId, energyBudget) {
+/**
+ * Escalation Policy: starts with the cheap model, escalates to bigger
+ * models when strategies fail. Never aborts — just tracks energy.
+ *
+ * Model ladder (sorted by capability, cheapest first):
+ *   gpt-oss-20b → Devstral-24B → Qwen3.5-397B → Kimi K2.5
+ */
+function buildModelLadder() {
+	const ids = [
+		"openai/gpt-oss-20b",
+		"mistralai/Devstral-Small-2-24B-Instruct-2512",
+		"Qwen/Qwen3.5-397B-A17B-FP8",
+		"moonshotai/Kimi-K2.5",
+	];
+	const models = [];
+	for (const id of ids) {
+		try {
+			models.push(getModel("neuralwatt", id));
+		} catch {
+			// Model not available, skip
+		}
+	}
+	return models;
+}
+
+class EscalationPolicy {
+	constructor(ladder) {
+		this.name = "escalation";
+		this.ladder = ladder;
+		this.currentRung = 0;
+		this.backtracks = 0;
+	}
+
+	get currentModel() {
+		return this.ladder[Math.min(this.currentRung, this.ladder.length - 1)];
+	}
+
+	escalate(reason) {
+		if (this.currentRung < this.ladder.length - 1) {
+			const prev = this.currentModel;
+			this.currentRung++;
+			this.backtracks++;
+			return { from: prev, to: this.currentModel, reason };
+		}
+		return null;
+	}
+
+	// RuntimePolicy interface — no-op for beforeModelCall (we handle model selection ourselves)
+	beforeModelCall() {
+		return { model: this.currentModel };
+	}
+
+	afterModelCall() {}
+}
+
+async function runDemo(demoProblem) {
 	const apiKey = process.env.NEURALWATT_API_KEY;
 	if (!apiKey) {
 		console.error("NEURALWATT_API_KEY required");
 		process.exit(1);
 	}
 
-	const model = getModel("neuralwatt", modelId);
-	const cheapModel = getModel("neuralwatt", cheapModelId);
-
-	// Gather all available neuralwatt models for the policy to route between
-	const availableModels = getModels("neuralwatt");
-
-	// Set up energy-aware policy
-	const policy = new EnergyAwarePolicy();
+	const ladder = buildModelLadder();
+	const escalation = new EscalationPolicy(ladder);
+	const startModel = escalation.currentModel;
 
 	// Header
 	console.log("");
 	console.log(boxTop(demoProblem.name));
-	console.log(boxMid(`${D}Primary: ${B}${shortModelName(model.id)}${X}${D}  Cheap: ${B}${shortModelName(cheapModel.id)}${X}`));
-	console.log(boxMid(`${D}Budget:  ${energyBudget}J  Policy: energy-aware (5-stage)${X}`));
-	console.log(boxMid(`${D}Task:    ${demoProblem.task.substring(0, 62)}...${X}`));
+	console.log(boxMid(`${D}Model ladder: ${ladder.map((m) => B + shortModelName(m.id) + X).join(`${D} ${ARROW} `)}${X}`));
+	console.log(boxMid(`${D}Start: ${B}${shortModelName(startModel.id)}${X}${D}  (escalates on backtrack)${X}`));
+	console.log(boxMid(`${D}Task:  ${demoProblem.task.substring(0, 63)}...${X}`));
 	console.log(boxBot());
 
 	const tree = new StrategyTree();
-	tree.energyBudget = energyBudget;
 
 	// Build tools
 	const sandbox = new ProcessSandbox();
@@ -427,20 +476,19 @@ Follow this cycle:
 	};
 
 	const loopConfig = {
-		model,
+		model: startModel,
 		convertToLlm: defaultConvertToLlm,
 		apiKey,
 		maxTokens: 4096,
-		policy,
-		budget: { energy_budget_joules: energyBudget },
-		availableModels,
+		policy: escalation,
+		availableModels: ladder,
 	};
 
 	const startTime = performance.now();
 	let totalCalls = 0;
 	let totalTokens = 0;
 	let solved = false;
-	let lastModelId = model.id;
+	let lastModelId = startModel.id;
 
 	console.log(`\n${D}Agent thinking...${X}`);
 
@@ -459,19 +507,14 @@ Follow this cycle:
 					const energy = msg.energy?.energy_joules || 0;
 					const usedModel = msg.model || lastModelId;
 
-					// Detect model switch
-					const switched = tree.recordModelUsage(usedModel, energy, null);
-					if (switched && usedModel !== lastModelId) {
-						const indent = tree._indent();
-						const pressure = tree.energyBudget > 0 ? (tree.totalEnergy / tree.energyBudget * 100).toFixed(0) : "?";
-						console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Model: ${B}${shortModelName(lastModelId)}${X} ${M}${ARROW}${X} ${B}${shortModelName(usedModel)}${X} ${D}(pressure: ${pressure}%)${X}`);
-						lastModelId = usedModel;
-					}
+					tree.recordModelUsage(usedModel, energy, null);
 
-					// Check for policy abort
-					if (msg.stopReason === "aborted") {
+					if (usedModel !== lastModelId) {
 						const indent = tree._indent();
-						console.log(`${indent}${C}${VERT}${X} ${R}${BOLT} Budget exhausted — policy aborted${X}`);
+						const rung = escalation.currentRung;
+						const reason = rung > 0 ? `escalation level ${rung}/${ladder.length - 1}` : "initial";
+						console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Model: ${B}${shortModelName(lastModelId)}${X} ${M}${ARROW}${X} ${B}${shortModelName(usedModel)}${X} ${D}(${reason})${X}`);
+						lastModelId = usedModel;
 					}
 				}
 				break;
@@ -513,6 +556,13 @@ Follow this cycle:
 						tree.markSuccess();
 					}
 				} else if (event.toolName === "record_lesson") {
+					// Escalate model on backtrack
+					const esc = escalation.escalate("strategy failed");
+					if (esc) {
+						const indent = tree._indent();
+						console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Escalating: ${B}${shortModelName(esc.from.id)}${X} ${M}${ARROW}${X} ${B}${shortModelName(esc.to.id)}${X} ${D}(backtrack #${escalation.backtracks})${X}`);
+					}
+
 					const s = strategies.find((st) => st.backtrack_reason);
 					const lesson = s?.backtrack_reason?.lesson || resultText;
 					tree.recordLesson(lesson);
@@ -534,23 +584,19 @@ Follow this cycle:
 // ---------------------------------------------------------------------------
 
 const [, , domain, variant] = process.argv;
-const modelId = process.env.DEMO_MODEL || "mistralai/Devstral-Small-2-24B-Instruct-2512";
-const cheapModelId = process.env.CHEAP_MODEL || "openai/gpt-oss-20b";
-const energyBudget = parseInt(process.env.ENERGY_BUDGET || "5000", 10);
 
 if (!domain || !["scheduling", "code-from-tests", "data-pipeline"].includes(domain)) {
-	console.log(`\n${B}Task Agent Demo${X} ${D}(energy-aware)${X}\n`);
+	console.log(`\n${B}Task Agent Demo${X} ${D}(with model escalation)${X}\n`);
 	console.log(`Usage: npx tsx demo.ts ${C}<domain>${X} ${D}[variant]${X}\n`);
 	console.log(`Domains:`);
 	console.log(`  ${C}scheduling${X}      ${D}[small|medium|hard]${X}       Constraint satisfaction`);
 	console.log(`  ${C}code-from-tests${X} ${D}[merge-intervals|lru-cache|longest-palindrome]${X}`);
 	console.log(`                                                 Iterative refinement`);
 	console.log(`  ${C}data-pipeline${X}   ${D}[easy|medium|hard]${X}        Decomposition + composition`);
+	console.log(`\nModel ladder (escalates on backtrack):`);
+	console.log(`  ${D}gpt-oss-20b ${ARROW} Devstral-24B ${ARROW} Qwen3.5-397B ${ARROW} Kimi-K2.5${X}`);
 	console.log(`\nEnvironment:`);
 	console.log(`  ${Y}NEURALWATT_API_KEY${X}  Required`);
-	console.log(`  ${D}DEMO_MODEL${X}          Primary model    (default: Devstral-24B)`);
-	console.log(`  ${D}CHEAP_MODEL${X}         Cheap model      (default: gpt-oss-20b)`);
-	console.log(`  ${D}ENERGY_BUDGET${X}       Budget in joules (default: 5000)`);
 	console.log("");
 	process.exit(1);
 }
@@ -570,7 +616,7 @@ switch (domain) {
 		throw new Error(`Unknown domain: ${domain}`);
 }
 
-runDemo(problem, modelId, cheapModelId, energyBudget).catch((err) => {
+runDemo(problem).catch((err) => {
 	console.error("Demo failed:", err);
 	process.exit(1);
 });
