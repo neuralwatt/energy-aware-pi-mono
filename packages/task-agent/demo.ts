@@ -390,6 +390,7 @@ class EscalationPolicy {
 		this.currentRung = 0;
 		this.backtracks = 0;
 		this.consecutiveFails = 0;
+		this._justEscalated = false;
 	}
 
 	get currentModel() {
@@ -400,14 +401,23 @@ class EscalationPolicy {
 	recordFailure() {
 		this.consecutiveFails++;
 		if (this.consecutiveFails >= MAX_FAILS_BEFORE_ESCALATE) {
-			return this.escalate(`${this.consecutiveFails} consecutive failures`);
+			return this._doEscalate(`${this.consecutiveFails} consecutive failures`);
 		}
 		return null;
 	}
 
-	/** Called on explicit backtrack (record_lesson) — always escalates */
+	/** Called on explicit backtrack (record_lesson) — escalates only if we haven't already this cycle */
 	escalate(reason) {
+		if (this._justEscalated) {
+			this._justEscalated = false;
+			return null; // already escalated from consecutive failures
+		}
+		return this._doEscalate(reason);
+	}
+
+	_doEscalate(reason) {
 		this.consecutiveFails = 0;
+		this._justEscalated = true;
 		if (this.currentRung < this.ladder.length - 1) {
 			const prev = this.currentModel;
 			this.currentRung++;
@@ -424,6 +434,7 @@ class EscalationPolicy {
 
 	// RuntimePolicy interface
 	beforeModelCall() {
+		this._justEscalated = false;
 		return { model: this.currentModel };
 	}
 
