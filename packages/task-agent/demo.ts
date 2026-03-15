@@ -381,19 +381,33 @@ function buildModelLadder() {
 	return models;
 }
 
+const MAX_FAILS_BEFORE_ESCALATE = 2;
+
 class EscalationPolicy {
 	constructor(ladder) {
 		this.name = "escalation";
 		this.ladder = ladder;
 		this.currentRung = 0;
 		this.backtracks = 0;
+		this.consecutiveFails = 0;
 	}
 
 	get currentModel() {
 		return this.ladder[Math.min(this.currentRung, this.ladder.length - 1)];
 	}
 
+	/** Called on validation failure — escalates after MAX_FAILS_BEFORE_ESCALATE consecutive failures */
+	recordFailure() {
+		this.consecutiveFails++;
+		if (this.consecutiveFails >= MAX_FAILS_BEFORE_ESCALATE) {
+			return this.escalate(`${this.consecutiveFails} consecutive failures`);
+		}
+		return null;
+	}
+
+	/** Called on explicit backtrack (record_lesson) — always escalates */
 	escalate(reason) {
+		this.consecutiveFails = 0;
 		if (this.currentRung < this.ladder.length - 1) {
 			const prev = this.currentModel;
 			this.currentRung++;
@@ -403,7 +417,12 @@ class EscalationPolicy {
 		return null;
 	}
 
-	// RuntimePolicy interface — no-op for beforeModelCall (we handle model selection ourselves)
+	/** Called on validation success — resets failure counter */
+	recordSuccess() {
+		this.consecutiveFails = 0;
+	}
+
+	// RuntimePolicy interface
 	beforeModelCall() {
 		return { model: this.currentModel };
 	}
@@ -554,10 +573,18 @@ Follow this cycle:
 
 					if (passed) {
 						solved = true;
+						escalation.recordSuccess();
 						tree.markSuccess();
+					} else {
+						// Escalate after consecutive failures
+						const esc = escalation.recordFailure();
+						if (esc) {
+							const indent = tree._indent();
+							console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Escalating: ${B}${shortModelName(esc.from.id)}${X} ${M}${ARROW}${X} ${B}${shortModelName(esc.to.id)}${X} ${D}(${esc.reason})${X}`);
+						}
 					}
 				} else if (event.toolName === "record_lesson") {
-					// Escalate model on backtrack
+					// Also escalate on explicit backtrack
 					const esc = escalation.escalate("strategy failed");
 					if (esc) {
 						const indent = tree._indent();
