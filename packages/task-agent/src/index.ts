@@ -1,5 +1,6 @@
 // Types
 
+export type { DecompositionLoopConfig } from "./decomposition/loop.js";
 // Decomposition
 export { DecompositionLoop } from "./decomposition/loop.js";
 // Sandbox
