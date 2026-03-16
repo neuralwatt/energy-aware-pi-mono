@@ -356,29 +356,69 @@ function defaultConvertToLlm(messages) {
 }
 
 /**
- * Escalation Policy: starts with a mid-tier model and escalates to
- * bigger models when strategies fail. Never aborts.
+ * Probe which Neuralwatt models are actually responding, then build
+ * a ladder sorted by capability (smallest to largest).
  *
- * Model ladder (sorted by capability):
- *   Devstral-24B → Qwen3.5-397B → Kimi K2.5
+ * Preferred models in order of capability:
+ *   Devstral-24B → Qwen3.5-35B → Qwen3.5-397B → Kimi-K2.5
  *
- * gpt-oss-20b is excluded — too weak to use tools reliably.
+ * Each has both a "full" and a "fast" variant — we try both.
  */
-function buildModelLadder() {
-	const ids = [
+async function buildModelLadder(apiKey) {
+	// Preferred model IDs in capability order, mixing full and fast variants
+	const candidates = [
 		"mistralai/Devstral-Small-2-24B-Instruct-2512",
+		"qwen3.5-35b-fast",
+		"Qwen/Qwen3.5-35B-A3B",
+		"glm-5-fast",
+		"qwen3.5-397b-fast",
 		"Qwen/Qwen3.5-397B-A17B-FP8",
+		"kimi-k2.5-fast",
 		"moonshotai/Kimi-K2.5",
 	];
-	const models = [];
-	for (const id of ids) {
+
+	console.log(`${D}Probing available models...${X}`);
+	const available = [];
+
+	for (const id of candidates) {
 		try {
-			models.push(getModel("neuralwatt", id));
+			const model = getModel("neuralwatt", id);
+			// Quick probe — single token
+			const resp = await fetch("https://api.neuralwatt.com/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					model: id,
+					messages: [{ role: "user", content: "ok" }],
+					max_tokens: 1,
+				}),
+				signal: AbortSignal.timeout(5000),
+			});
+			if (resp.ok) {
+				const json = await resp.json();
+				if (json.choices?.length > 0) {
+					available.push(model);
+					console.log(`  ${G}${CHECK}${X} ${shortModelName(id)}`);
+				} else {
+					console.log(`  ${R}${CROSS}${X} ${shortModelName(id)} ${D}(empty response)${X}`);
+				}
+			} else {
+				console.log(`  ${R}${CROSS}${X} ${shortModelName(id)} ${D}(${resp.status})${X}`);
+			}
 		} catch {
-			// Model not available, skip
+			console.log(`  ${R}${CROSS}${X} ${shortModelName(id)} ${D}(timeout/error)${X}`);
 		}
 	}
-	return models;
+
+	if (available.length === 0) {
+		console.error(`${R}No models available. Check NEURALWATT_API_KEY and API status.${X}`);
+		process.exit(1);
+	}
+
+	return available;
 }
 
 const MAX_FAILS_BEFORE_ESCALATE = 2;
@@ -448,7 +488,7 @@ async function runDemo(demoProblem) {
 		process.exit(1);
 	}
 
-	const ladder = buildModelLadder();
+	const ladder = await buildModelLadder(apiKey);
 	const escalation = new EscalationPolicy(ladder);
 	const startModel = escalation.currentModel;
 
@@ -534,7 +574,8 @@ Follow this cycle:
 			case "message_end":
 				if (event.message.role === "assistant") {
 					const msg = event.message;
-					totalTokens += msg.usage?.totalTokens ?? 0;
+					const tokens = msg.usage?.totalTokens ?? 0;
+					totalTokens += tokens;
 					const energy = msg.energy?.energy_joules || 0;
 					const usedModel = msg.model || lastModelId;
 
@@ -546,6 +587,16 @@ Follow this cycle:
 						const reason = rung > 0 ? `escalation level ${rung}/${ladder.length - 1}` : "initial";
 						console.log(`${indent}${C}${VERT}${X} ${M}${BOLT} Model: ${B}${shortModelName(lastModelId)}${X} ${M}${ARROW}${X} ${B}${shortModelName(usedModel)}${X} ${D}(${reason})${X}`);
 						lastModelId = usedModel;
+					}
+
+					// Detect API failure (0 tokens or error) — escalate to skip broken model
+					if (tokens === 0 || msg.stopReason === "error") {
+						const esc = escalation.escalate("API error/empty response");
+						if (esc) {
+							console.log(`${R}${BOLT} ${shortModelName(esc.from.id)} failed${X} ${M}${ARROW}${X} skipping to ${B}${shortModelName(esc.to.id)}${X}`);
+						} else {
+							console.log(`${R}${BOLT} All models failing${X}`);
+						}
 					}
 				}
 				break;
