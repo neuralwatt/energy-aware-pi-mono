@@ -56,9 +56,11 @@ where it matters and conserve where it doesn't.
 - **Adaptive strategy chain** — as budget pressure rises, the policy
   progressively reduces reasoning depth, caps output tokens, routes to
   cheaper models, compacts context, and ultimately aborts if the budget is
-  exhausted
+  exhausted. Can leverage budget as informational only via config.
 - **Model routing** — automatically switches to the most cost-effective model
-  that still meets capability requirements (reasoning, image support)
+  that still meets capability requirements (reasoning, image support) while 
+  aggressively upgrading model capability on subtask failure to ensure problem
+  convergence while maintaining efficiency.
 - **Structured telemetry** — JSONL telemetry records for every call, ready
   for dashboards, auditing, or billing
 - **Benchmark harness** — compare baseline vs energy-aware mode side-by-side
@@ -68,7 +70,7 @@ where it matters and conserve where it doesn't.
 
 | Metric | Target | How |
 |--------|--------|-----|
-| Energy per task | **>=20% reduction** vs baseline | Reasoning reduction, token capping, model routing |
+| Energy per task | **>=80% reduction** vs baseline | Reasoning reduction, token capping, model routing |
 | Success rate | **<=5% degradation** vs baseline | Strategies are progressive — light interventions first |
 | Cost per task | Proportional to energy savings | Cheaper models consume less energy and cost less |
 | Context efficiency | Reduced bloat under pressure | Compaction triggered when context exceeds 60% of window |
@@ -80,6 +82,8 @@ most expensive model. Energy-aware mode uses the full budget where it counts
 (simple responses, status checks).
 
 ### Quick Integration Guide
+
+How to quickly extend the agent capabilities of **Pi** dependent code to leverage these capabilities
 
 **Step 1: Set your API key**
 
@@ -891,7 +895,7 @@ comparing energy consumption between modes over 3 minutes.
 ## Acceptance Criteria
 
 Energy-aware mode must:
-- Achieve **>=20% energy reduction** compared to baseline across the
+- Achieve **>=80% energy reduction** compared to baseline across the
   benchmark task suite
 - Maintain **<=5% success rate degradation** compared to baseline
 - Never crash when energy telemetry is missing (graceful fallback to
