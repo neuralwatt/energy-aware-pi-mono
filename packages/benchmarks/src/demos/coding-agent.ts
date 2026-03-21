@@ -1592,6 +1592,7 @@ async function main(): Promise<void> {
 	}
 	console.log("╠══════════════════════════════════════════════════════════════════════╣");
 	console.log("║  Flags:  --runs N --reverse --budget N --static --fast --hard       ║");
+	console.log("║          --clear-memory                                             ║");
 	console.log("╚══════════════════════════════════════════════════════════════════════╝");
 
 	// Warn about energy telemetry source
