@@ -7,13 +7,18 @@ other examples we've outlined here: [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md).
 The actual per-request energy values come from the Neuralwatt AI model platform here: https://portal.neuralwatt.com/
 
 This is what the demo energy-aware coding agent looks like in action:
+```bash
+npm run demo:coding -w packages/benchmarks
+```
 <img width="1717" height="1492" alt="EADemo" src="https://github.com/user-attachments/assets/da7b32ae-7eaa-4146-b5f6-96905d4adb4f" />
 
 And this is the demo HN watcher agent looks like in action:
+```bash
+npm run demo:hn -w packages/benchmarks
+```
 <img width="712" height="812" alt="HN" src="https://github.com/user-attachments/assets/7767e808-7931-44a8-aa4a-b2219bdf919d" />
 
-You can run these from the packages/benchmarks directory and currently they are designed to inspire thinking and to show what is possible
-with energy awareness.  We may think about integrating these capabilities to other tools at some point.
+Both demos require `NEURALWATT_API_KEY` to be set. They are designed to inspire thinking and to show what is possible with energy awareness.
 
 # Energy Observability
 The energy data coming back from the supported APIs is useful for billing, dashboards and compliance.  Paired with location information (available from 
