@@ -1538,14 +1538,15 @@ async function main(): Promise<void> {
 		allowPositionals: true,
 	});
 
+	if (values["clear-memory"]) {
+		clearMemory();
+		console.log("Memory cleared (~/.energy-demo-memory.json deleted).");
+		process.exit(0);
+	}
+
 	if (!process.env.NEURALWATT_API_KEY) {
 		console.error("NEURALWATT_API_KEY required");
 		process.exit(1);
-	}
-
-	if (values["clear-memory"]) {
-		clearMemory();
-		console.log("Memory cleared.");
 	}
 
 	registerBuiltInApiProviders();
