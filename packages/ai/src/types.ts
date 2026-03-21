@@ -212,6 +212,38 @@ export interface ToolResultMessage<TDetails = any> {
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
+/**
+ * Build an AssistantMessage with all current fields.
+ *
+ * Downstream consumers that construct AssistantMessage manually risk silently
+ * dropping new optional fields (e.g. `energy`). Use this helper to stay
+ * forward-compatible as the type evolves.
+ */
+export function buildAssistantMessage(params: {
+	content: AssistantMessage["content"];
+	api: Api;
+	provider: Provider;
+	model: string;
+	usage: Usage;
+	stopReason: StopReason;
+	energy?: EnergyUsage;
+	errorMessage?: string;
+	timestamp?: number;
+}): AssistantMessage {
+	return {
+		role: "assistant",
+		content: params.content,
+		api: params.api,
+		provider: params.provider,
+		model: params.model,
+		usage: params.usage,
+		energy: params.energy,
+		stopReason: params.stopReason,
+		errorMessage: params.errorMessage,
+		timestamp: params.timestamp ?? Date.now(),
+	};
+}
+
 import type { TSchema } from "@sinclair/typebox";
 
 export interface Tool<TParameters extends TSchema = TSchema> {

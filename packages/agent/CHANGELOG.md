@@ -11,10 +11,18 @@
 - Added `BaselinePolicy` — no-op policy for benchmarking that logs telemetry without intervention
 - Added `EnergyAwarePolicy` — budget-aware policy with 5-strategy chain: reasoning reduction, token limit reduction, model routing, context compaction, and budget exhaustion abort
 - Added `availableModels` and `budget` fields to `AgentLoopConfig` for policy-driven model routing and budget enforcement
+- Added `onCompact` callback to `AgentLoopConfig` — invoked when the policy sets `shouldCompact: true`, allowing callers (e.g. openclaw) to wire in their own context compaction logic
+- Added `policy`, `availableModels`, `budget`, and `onCompact` to `AgentOptions` and the `Agent` class, so callers using the high-level `Agent` API can configure energy-aware mode without dropping to the low-level `agentLoop()` function
+- Added runtime accessors on `Agent`: `policy`, `availableModels`, `budget` (get/set) for mid-session configuration changes
 
 ### Fixed
 
 - Fixed `AgentLoopConfig` fields `availableModels` and `budget` not being passed through to `PolicyContext` in the agent loop — previously both were hardcoded as empty, preventing `EnergyAwarePolicy` from triggering model routing or budget pressure in real runs
+
+### Integration Notes (openclaw)
+
+- **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. Use `buildAssistantMessage()` from `@mariozechner/pi-ai` instead of object literals.
+- The `onCompact` callback replaces the previous silent ignore of `shouldCompact` — callers should wire this to their existing compaction mechanism.
 
 ## [0.57.1] - 2026-03-07
 

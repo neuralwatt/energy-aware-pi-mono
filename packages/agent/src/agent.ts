@@ -15,6 +15,7 @@ import {
 	type Transport,
 } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
+import type { EnergyBudget, RuntimePolicy } from "./policy/types.js";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -97,6 +98,24 @@ export interface AgentOptions {
 	 * Default: 60000 (60 seconds). Set to 0 to disable the cap.
 	 */
 	maxRetryDelayMs?: number;
+
+	/**
+	 * Optional runtime policy for energy-aware budgeting.
+	 * When set, the agent loop calls `beforeModelCall`/`afterModelCall` on each turn.
+	 */
+	policy?: RuntimePolicy;
+
+	/** Models available for policy-driven model routing, sorted by cost.output ascending. */
+	availableModels?: Model<any>[];
+
+	/** Energy/time budget for policy-driven budget enforcement. */
+	budget?: EnergyBudget;
+
+	/**
+	 * Called when the policy requests context compaction.
+	 * If not provided, the `shouldCompact` signal is ignored.
+	 */
+	onCompact?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
 }
 
 export class Agent {
@@ -129,6 +148,10 @@ export class Agent {
 	private _thinkingBudgets?: ThinkingBudgets;
 	private _transport: Transport;
 	private _maxRetryDelayMs?: number;
+	private _policy?: RuntimePolicy;
+	private _availableModels?: Model<any>[];
+	private _budget?: EnergyBudget;
+	private _onCompact?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -143,6 +166,10 @@ export class Agent {
 		this._thinkingBudgets = opts.thinkingBudgets;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
+		this._policy = opts.policy;
+		this._availableModels = opts.availableModels;
+		this._budget = opts.budget;
+		this._onCompact = opts.onCompact;
 	}
 
 	/**
@@ -201,6 +228,36 @@ export class Agent {
 	 */
 	set maxRetryDelayMs(value: number | undefined) {
 		this._maxRetryDelayMs = value;
+	}
+
+	/** Get the current runtime policy. */
+	get policy(): RuntimePolicy | undefined {
+		return this._policy;
+	}
+
+	/** Set or clear the runtime policy for energy-aware budgeting. */
+	set policy(value: RuntimePolicy | undefined) {
+		this._policy = value;
+	}
+
+	/** Get the available models for policy-driven routing. */
+	get availableModels(): Model<any>[] | undefined {
+		return this._availableModels;
+	}
+
+	/** Set available models for policy-driven routing (sorted by cost.output ascending). */
+	set availableModels(value: Model<any>[] | undefined) {
+		this._availableModels = value;
+	}
+
+	/** Get the current energy/time budget. */
+	get budget(): EnergyBudget | undefined {
+		return this._budget;
+	}
+
+	/** Set or clear the energy/time budget. */
+	set budget(value: EnergyBudget | undefined) {
+		this._budget = value;
 	}
 
 	get state(): AgentState {
@@ -452,6 +509,10 @@ export class Agent {
 				return this.dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.dequeueFollowUpMessages(),
+			policy: this._policy,
+			availableModels: this._availableModels,
+			budget: this._budget,
+			onCompact: this._onCompact,
 		};
 
 		let partial: AgentMessage | null = null;

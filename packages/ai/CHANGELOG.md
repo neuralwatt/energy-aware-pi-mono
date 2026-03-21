@@ -11,6 +11,11 @@
 - Added `energy?: EnergyUsage` field to `AssistantMessage` for per-request energy telemetry.
 - Added automatic energy metric parsing from OpenAI-compatible streaming responses (Neuralwatt and any provider including energy fields in usage).
 - Added `TelemetryRecord` interface and JSONL serialization/parsing utilities in `energy-types.ts` for structured telemetry logging.
+- Added `buildAssistantMessage()` factory function — constructs `AssistantMessage` with all current fields including `energy`. Downstream consumers should use this instead of object literals to stay forward-compatible as the type evolves.
+
+### Integration Notes (openclaw)
+
+- **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. openclaw's `buildAssistantMessage()` in `stream-message-shared.ts` is affected — it explicitly constructs objects with fixed fields and drops `energy`.
 
 ### Fixed
 

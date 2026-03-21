@@ -202,6 +202,11 @@ async function runLoop(
 				}
 			}
 
+			// Handle compaction if policy requested it
+			if (policyDecision?.shouldCompact && config.onCompact) {
+				currentContext.messages = await config.onCompact(currentContext.messages);
+			}
+
 			// Stream assistant response
 			const message = await streamAssistantResponse(
 				currentContext,
