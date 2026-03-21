@@ -10,46 +10,44 @@ describe("Neuralwatt provider configuration", () => {
 			expect(providers).toContain("neuralwatt");
 		});
 
-		it("should have neuralwatt-large model", () => {
-			const model = getModel("neuralwatt", "neuralwatt-large");
+		it("should have Qwen3.5 397B model", () => {
+			const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 			expect(model).toBeDefined();
-			expect(model.id).toBe("neuralwatt-large");
+			expect(model.id).toBe("Qwen/Qwen3.5-397B-A17B-FP8");
 			expect(model.api).toBe("openai-completions");
 			expect(model.provider).toBe("neuralwatt");
 			expect(model.baseUrl).toBe("https://api.neuralwatt.com/v1");
-			expect(model.reasoning).toBe(true);
 			expect(model.input).toContain("text");
-			expect(model.input).toContain("image");
-			expect(model.contextWindow).toBe(128000);
-			expect(model.maxTokens).toBe(16384);
+			expect(model.contextWindow).toBe(262144);
+			expect(model.maxTokens).toBeGreaterThan(0);
 		});
 
-		it("should have neuralwatt-small model", () => {
-			const model = getModel("neuralwatt", "neuralwatt-small");
+		it("should have GPT-OSS 20B model", () => {
+			const model = getModel("neuralwatt", "openai/gpt-oss-20b");
 			expect(model).toBeDefined();
-			expect(model.id).toBe("neuralwatt-small");
+			expect(model.id).toBe("openai/gpt-oss-20b");
 			expect(model.api).toBe("openai-completions");
 			expect(model.provider).toBe("neuralwatt");
 			expect(model.baseUrl).toBe("https://api.neuralwatt.com/v1");
-			expect(model.reasoning).toBe(false);
 			expect(model.input).toEqual(["text"]);
-			expect(model.contextWindow).toBe(128000);
-			expect(model.maxTokens).toBe(8192);
+			expect(model.contextWindow).toBe(16384);
+			expect(model.maxTokens).toBeGreaterThan(0);
 		});
 
-		it("should have neuralwatt-small cost lower than neuralwatt-large", () => {
-			const large = getModel("neuralwatt", "neuralwatt-large");
-			const small = getModel("neuralwatt", "neuralwatt-small");
+		it("should have GPT-OSS cost lower than Qwen 397B", () => {
+			const large = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
+			const small = getModel("neuralwatt", "openai/gpt-oss-20b");
 			expect(small.cost.output).toBeLessThan(large.cost.output);
 			expect(small.cost.input).toBeLessThan(large.cost.input);
 		});
 
 		it("should return all neuralwatt models via getModels", () => {
 			const models = getModels("neuralwatt");
-			expect(models.length).toBe(2);
+			expect(models.length).toBeGreaterThanOrEqual(5);
 			const ids = models.map((m: Model<"openai-completions">) => m.id);
-			expect(ids).toContain("neuralwatt-large");
-			expect(ids).toContain("neuralwatt-small");
+			expect(ids).toContain("openai/gpt-oss-20b");
+			expect(ids).toContain("Qwen/Qwen3.5-397B-A17B-FP8");
+			expect(ids).toContain("mistralai/Devstral-Small-2-24B-Instruct-2512");
 		});
 	});
 
@@ -78,7 +76,7 @@ describe("Neuralwatt provider configuration", () => {
 		() => {
 			it("should complete a chat request through Neuralwatt endpoint", { timeout: 30000 }, async () => {
 				const { complete } = await import("../src/stream.js");
-				const model = getModel("neuralwatt", "neuralwatt-large");
+				const model = getModel("neuralwatt", "mistralai/Devstral-Small-2-24B-Instruct-2512");
 				const response = await complete(model, {
 					systemPrompt: "You are a helpful assistant. Be concise.",
 					messages: [
@@ -94,12 +92,12 @@ describe("Neuralwatt provider configuration", () => {
 
 	describe("model compat settings", () => {
 		it("should have conservative compat settings for neuralwatt models", () => {
-			const large = getModel("neuralwatt", "neuralwatt-large");
-			expect(large.compat).toBeDefined();
-			expect(large.compat!.supportsStore).toBe(false);
-			expect(large.compat!.supportsDeveloperRole).toBe(false);
-			expect(large.compat!.supportsReasoningEffort).toBe(false);
-			expect(large.compat!.maxTokensField).toBe("max_tokens");
+			const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
+			expect(model.compat).toBeDefined();
+			expect(model.compat!.supportsStore).toBe(false);
+			expect(model.compat!.supportsDeveloperRole).toBe(false);
+			expect(model.compat!.supportsReasoningEffort).toBe(false);
+			expect(model.compat!.maxTokensField).toBe("max_tokens");
 		});
 	});
 });

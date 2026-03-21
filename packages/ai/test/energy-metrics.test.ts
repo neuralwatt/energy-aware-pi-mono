@@ -52,7 +52,7 @@ describe("energy metrics parsing", () => {
 		});
 
 		const { complete } = await import("../src/stream.js");
-		const model = getModel("neuralwatt", "neuralwatt-large");
+		const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 		const response = await complete(
 			model,
 			{
@@ -80,7 +80,7 @@ describe("energy metrics parsing", () => {
 		});
 
 		const { complete } = await import("../src/stream.js");
-		const model = getModel("neuralwatt", "neuralwatt-large");
+		const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 		const response = await complete(
 			model,
 			{
@@ -108,7 +108,7 @@ describe("energy metrics parsing", () => {
 		});
 
 		const { complete } = await import("../src/stream.js");
-		const model = getModel("neuralwatt", "neuralwatt-large");
+		const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 		const response = await complete(
 			model,
 			{
@@ -135,7 +135,7 @@ describe("energy metrics parsing", () => {
 		});
 
 		const { complete } = await import("../src/stream.js");
-		const model = getModel("neuralwatt", "neuralwatt-large");
+		const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 		const response = await complete(
 			model,
 			{
@@ -160,7 +160,7 @@ describe("energy metrics parsing", () => {
 		});
 
 		const { complete } = await import("../src/stream.js");
-		const model = getModel("neuralwatt", "neuralwatt-large");
+		const model = getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8");
 		const response = await complete(
 			model,
 			{
