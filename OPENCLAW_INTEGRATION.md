@@ -11,22 +11,43 @@ openclaw depends on 4 pi-mono packages (`@mariozechner/pi-ai`,
 
 All energy-aware changes are additive and opt-in — no existing APIs were broken.
 However, openclaw's internal patterns create friction that must be addressed on
-**both** sides.
+the **openclaw** side. All pi-mono preparatory work is complete.
 
 ---
 
-## Critical Issues (must fix before integration)
+## Pi-mono Preparatory Work (all complete)
 
-### 1. `buildAssistantMessage()` drops the `energy` field
+| Task | Description | Status |
+|------|-------------|--------|
+| P1 | `buildAssistantMessage()` factory in pi-ai — constructs AssistantMessage with all fields including `energy` | Done |
+| P2 | `createAgentSession` in pi-coding-agent accepts `policy`, `availableModels`, `budget`, `onCompact` and forwards to Agent | Done |
+| P3 | `onCompact` callback on `AgentLoopConfig` — agent loop invokes it when policy sets `shouldCompact: true` | Done |
+| P4 | Energy types exported from package entry points (`EnergyUsage`, `EnergyBudget`, `RuntimePolicy`, etc.) | Done |
+| P5 | CHANGELOG entries documenting `energy` passthrough requirement for downstream consumers | Done |
+| P6 | `Agent` class accepts and forwards `policy`, `availableModels`, `budget`, `onCompact` via `AgentOptions` + runtime accessors | Done |
+| P7 | pi-coding-agent re-exports `EnergyBudget`, `RuntimePolicy`, `EnergyUsage` so openclaw can import from a single package | Done |
+| P8 | Fixed pre-existing type errors (openai SDK `phase` field, missing `extract-zip` types) so `npm run check` passes clean | Done |
+
+---
+
+## Remaining Work (openclaw side)
+
+### Critical — must fix for energy data to flow
+
+#### 1. `buildAssistantMessage()` drops the `energy` field
 
 **Where:** `openclaw/src/agents/stream-message-shared.ts`
 
 openclaw's `buildAssistantMessage()` constructs a new `AssistantMessage` with
-explicit fields and does **not** pass through unknown properties. The `energy?:
-EnergyUsage` field added to `AssistantMessage` in pi-ai is silently discarded.
+explicit fields and does **not** pass through the `energy` property. The
+`energy?: EnergyUsage` field added to `AssistantMessage` in pi-ai is silently
+discarded.
 
-**Fix (openclaw side):** Add `energy` to `buildAssistantMessage()`:
+**Fix:** Add `energy` to the params type and the returned object. Or switch to
+using `buildAssistantMessage()` from `@mariozechner/pi-ai` (exported as P1).
+
 ```typescript
+// In stream-message-shared.ts buildAssistantMessage():
 return {
   role: "assistant",
   content: params.content,
@@ -35,56 +56,48 @@ return {
   provider: params.model.provider,
   model: params.model.id,
   usage: params.usage,
-  energy: params.energy,           // <-- add
+  energy: params.energy,           // <-- add this
   timestamp: params.timestamp ?? Date.now(),
 };
 ```
 
-**Fix (pi-mono side):** Export a helper that constructs `AssistantMessage` with
-all fields so downstream consumers don't have to track new additions manually.
-See **Task P1** below.
-
-### 2. Usage construction helpers ignore energy
-
-**Where:** `openclaw/src/agents/stream-message-shared.ts`
-
-`buildZeroUsage()` and `buildUsageWithNoCost()` construct `Usage` objects with
-hardcoded field lists. Energy fields on `UsageWithEnergy` are not represented.
-
-**Fix (openclaw side):** These functions produce `Usage` objects (not
-`UsageWithEnergy`), which is correct — energy lives on `AssistantMessage.energy`,
-not inside `Usage`. No change needed here as long as issue #1 is fixed.
-
-### 3. `normalizeUsage()` drops energy data in result pipeline
+#### 2. `normalizeUsage()` drops energy data in result pipeline
 
 **Where:** `openclaw/src/agents/usage.ts` and `pi-embedded-runner/run.ts`
 
 The usage normalization pipeline (`toNormalizedUsage`, `normalizeUsage`)
 extracts specific token fields by name and reconstructs a new object.
-Energy data from the original `AssistantMessage` is lost.
+Energy data from the original `AssistantMessage` is lost when building
+`EmbeddedPiAgentMeta`.
 
-**Fix (openclaw side):** When building `EmbeddedPiAgentMeta`, propagate
-`energy` from the last `AssistantMessage` alongside the normalized usage.
+**Fix:** When building `EmbeddedPiAgentMeta`, propagate `energy` from the
+last `AssistantMessage` alongside the normalized usage.
 
----
+### High Priority — needed for energy-aware mode
 
-## High-Priority Issues
-
-### 4. `createAgentSession` does not pass policy config
+#### 3. Wire policy config through openclaw's session creation
 
 **Where:** `openclaw/src/agents/pi-embedded-runner/run/attempt.ts`
 
-openclaw calls `createAgentSession()` with explicit named parameters. There is
-no pass-through for `policy`, `availableModels`, or `budget` — the new
-`AgentLoopConfig` fields added for energy-aware mode.
+openclaw calls `createAgentSession()` with explicit named parameters. Now that
+`createAgentSession` accepts `policy`, `availableModels`, `budget`, and
+`onCompact` (P2), openclaw needs to pass them.
 
-**Fix (openclaw side):** Add optional `policy`, `availableModels`, `budget`
-params to openclaw's session creation path, passed through to the agent loop.
+**Fix:** Add optional energy-aware config to openclaw's session creation path
+and forward to `createAgentSession()`.
 
-**Fix (pi-mono side):** Ensure `createAgentSession` in pi-coding-agent
-accepts and forwards these fields. See **Task P2** below.
+#### 4. Connect compaction signal to openclaw's compaction extension
 
-### 5. Model routing conflict
+**Where:** openclaw's context pruning / compaction extension
+
+The `onCompact` callback (P3) lets the agent loop notify the caller when the
+policy wants compaction. openclaw already has context pruning and compaction
+extensions but they're not connected to this signal.
+
+**Fix:** When constructing `createAgentSession` options, provide an `onCompact`
+callback that triggers openclaw's existing compaction mechanism.
+
+#### 5. Model routing coordination
 
 openclaw has its own model routing logic (provider-specific stream wrappers,
 gateway model selection). The `EnergyAwarePolicy` can also route to a different
@@ -97,43 +110,31 @@ model via `PolicyDecision.model`.
 - openclaw should populate `availableModels` with Neuralwatt models sorted by
   `cost.output` ascending, letting the policy pick from that pre-filtered set
 
-### 6. `shouldCompact` policy decision not wired
+No code fix needed — just pass the right `availableModels` when configuring
+the session.
 
-The `EnergyAwarePolicy` can set `shouldCompact: true` to request context
-compaction. The agent loop does **not** act on this flag — it's left to the
-caller. openclaw already has context pruning and compaction extensions, but
-they're not connected to the policy signal.
+### Medium Priority — nice to have
 
-**Fix (openclaw side):** When `shouldCompact` is set in a policy decision,
-trigger openclaw's existing compaction extension.
-
-**Fix (pi-mono side):** Add a `shouldCompact` callback to `AgentLoopConfig`
-so the agent loop can act on the signal directly. See **Task P3** below.
-
----
-
-## Medium-Priority Issues
-
-### 7. Plugin SDK does not re-export energy types
+#### 6. Plugin SDK does not re-export energy types
 
 **Where:** `openclaw/src/plugin-sdk/index.ts`
 
 openclaw's plugin SDK does not re-export any pi-ai or pi-agent-core types.
 Plugin authors who want to consume energy data must import directly from
-`@mariozechner/pi-ai`.
+`@mariozechner/pi-ai` or `@mariozechner/pi-coding-agent`.
 
-**Fix (openclaw side):** Re-export `EnergyUsage`, `EnergyBudget`,
-`RuntimePolicy`, `PolicyDecision` from the plugin SDK.
+**Fix:** Re-export `EnergyUsage`, `EnergyBudget`, `RuntimePolicy`,
+`PolicyDecision` from the plugin SDK.
 
-### 8. Telemetry pipeline not wired
+#### 7. Telemetry pipeline not wired
 
 pi-mono's `TelemetryRecord` and JSONL serialization (`energy-types.ts`) have
 no consumer in openclaw. Telemetry records need a destination.
 
-**Fix (openclaw side):** Use `SessionManager.appendCustomEntry()` to persist
-telemetry records per session, or write to a separate JSONL file.
+**Fix:** Use `SessionManager.appendCustomEntry()` to persist telemetry records
+per session, or write to a separate JSONL file.
 
-### 9. Tool execute signature variance
+#### 8. Tool execute signature variance
 
 openclaw uses two `execute` signatures for tools:
 - `(toolCallId, params, signal?, onUpdate?)`
@@ -148,63 +149,16 @@ Only matters if adopting `TaskAgent` directly.
 
 ---
 
-## Preparatory Tasks (pi-mono side)
-
-These are code changes in energy-aware-pi-mono that reduce friction for
-openclaw integration.
-
-### P1: Add `buildAssistantMessage` helper to pi-ai
-
-Export a factory function that constructs `AssistantMessage` with all current
-fields (including `energy`). This gives downstream consumers a single
-construction point that stays up to date as the type evolves.
-
-**Status:** Done (branch `openclaw/integration`)
-
-### P2: Forward policy config through `createAgentSession`
-
-Ensure `createAgentSession` in pi-coding-agent accepts `policy`,
-`availableModels`, and `budget` and passes them to the agent loop config.
-
-**Status:** TODO (requires pi-coding-agent changes)
-
-### P3: Add `onCompact` callback to `AgentLoopConfig`
-
-When the policy sets `shouldCompact: true`, invoke a caller-provided callback
-instead of silently ignoring the signal. This lets openclaw wire it to its
-existing compaction extension.
-
-**Status:** Done (branch `openclaw/integration`)
-
-### P4: Export energy types from package entry points
-
-Verify that `EnergyUsage`, `EnergyBudget`, `RuntimePolicy`, `PolicyDecision`,
-`UsageWithEnergy`, `TelemetryRecord` are all exported from their respective
-package entry points (`packages/ai/src/index.ts`,
-`packages/agent/src/index.ts`).
-
-**Status:** Already exported (verified)
-
-### P5: Add `energy` passthrough guidance to CHANGELOG
-
-Document in both `packages/ai/CHANGELOG.md` and `packages/agent/CHANGELOG.md`
-that downstream consumers constructing `AssistantMessage` manually must add
-the optional `energy` field to avoid silent data loss.
-
-**Status:** Done (branch `openclaw/integration`)
-
----
-
 ## Integration Sequence
 
 Recommended order of operations:
 
-1. **Land pi-mono changes** (P1, P3, P5) — this branch
-2. **Bump openclaw's pi-mono deps** to the new version
-3. **Fix `buildAssistantMessage()`** in openclaw (issue #1) — smallest change,
+1. **Bump openclaw's pi-mono deps** to the energy-aware fork
+2. **Fix `buildAssistantMessage()`** in openclaw (issue #1) — smallest change,
    biggest impact
-4. **Wire policy config** through openclaw's session creation (issue #4)
-5. **Connect compaction signal** (issue #6)
-6. **Add telemetry persistence** (issue #8)
-7. **Re-export types** from plugin SDK (issue #7)
+3. **Fix `normalizeUsage()`** energy propagation (issue #2)
+4. **Wire policy config** through openclaw's session creation (issue #3)
+5. **Connect compaction signal** (issue #4)
+6. **Add telemetry persistence** (issue #7)
+7. **Re-export types** from plugin SDK (issue #6)
 8. **Test end-to-end** with Neuralwatt models and energy budgets

@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type ThinkingLevel } from "@mariozechner/pi-agent-core";
+import {
+	Agent,
+	type AgentMessage,
+	type EnergyBudget,
+	type RuntimePolicy,
+	type ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
 import type { Message, Model } from "@mariozechner/pi-ai";
 import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
@@ -69,6 +75,15 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
 	settingsManager?: SettingsManager;
+
+	/** Optional runtime policy for energy-aware budgeting. */
+	policy?: RuntimePolicy;
+	/** Models available for policy-driven model routing, sorted by cost.output ascending. */
+	availableModels?: Model<any>[];
+	/** Energy/time budget for policy-driven budget enforcement. */
+	budget?: EnergyBudget;
+	/** Called when the policy requests context compaction. */
+	onCompact?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
 }
 
 /** Result from createAgentSession */
@@ -83,6 +98,8 @@ export interface CreateAgentSessionResult {
 
 // Re-exports
 
+export type { EnergyBudget, RuntimePolicy } from "@mariozechner/pi-agent-core";
+export type { EnergyUsage } from "@mariozechner/pi-ai";
 export type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -310,6 +327,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
+		policy: options.policy,
+		availableModels: options.availableModels,
+		budget: options.budget,
+		onCompact: options.onCompact,
 		getApiKey: async (provider) => {
 			// Use the provider argument from the in-flight request;
 			// agent.state.model may already be switched mid-turn.
