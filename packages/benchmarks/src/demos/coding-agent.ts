@@ -1138,11 +1138,16 @@ function printScorecard(
 
 	console.log("");
 	// Summary line for each mode — account for quality differences
+	const timeSaved = timeDelta < 0 ? Math.abs(timeDelta) : 0;
+	const fastTimeSaved =
+		hasFast && baseTime > 0 ? Math.max(0, ((baseTime - (fast.endTime - fast.startTime) / 1000) / baseTime) * 100) : 0;
+
 	const fmtSummary = (
 		label: string,
 		color: string,
 		saved: number,
 		costPct: number,
+		speedPct: number,
 		passed: boolean | undefined,
 		baselinePassed: boolean | undefined,
 	): void => {
@@ -1150,15 +1155,32 @@ function printScorecard(
 			console.log(`  \x1b[31m✗ ${label}: ${saved.toFixed(0)}% less energy but FAILED (baseline passed)\x1b[0m`);
 		} else if (saved > 0) {
 			const qualitySame = baselinePassed === true && passed === true ? " — same quality outcome" : "";
+			const speedStr = speedPct > 0 ? `, ${speedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  ${color}✓ ${label}: ${saved.toFixed(0)}% less energy, ${costPct.toFixed(0)}% lower cost${qualitySame}\x1b[0m`,
+				`  ${color}✓ ${label}: ${saved.toFixed(0)}% less energy, ${costPct.toFixed(0)}% lower cost${speedStr}${qualitySame}\x1b[0m`,
 			);
 		}
 	};
 
-	fmtSummary("Energy-aware", "\x1b[32m", energySaved, costSaved, energyAware.testPassed, baseline.testPassed);
+	fmtSummary(
+		"Energy-aware",
+		"\x1b[32m",
+		energySaved,
+		costSaved,
+		timeSaved,
+		energyAware.testPassed,
+		baseline.testPassed,
+	);
 	if (hasFast) {
-		fmtSummary("Fast mode", "\x1b[33m", fastEnergySaved, fastCostSaved, fast.testPassed, baseline.testPassed);
+		fmtSummary(
+			"Fast mode",
+			"\x1b[33m",
+			fastEnergySaved,
+			fastCostSaved,
+			fastTimeSaved,
+			fast.testPassed,
+			baseline.testPassed,
+		);
 	}
 }
 
@@ -1350,6 +1372,12 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 	const avgEaCost = nPassed > 0 ? allPassed.reduce((s, p) => s + estimateCost(p.ea.turns), 0) / nPassed : 0;
 	const avgCostSavedPct = avgBaseCost > 0 ? ((avgBaseCost - avgEaCost) / avgBaseCost) * 100 : 0;
 
+	const avgBaseTime =
+		nPassed > 0 ? allPassed.reduce((s, p) => s + (p.baseline.endTime - p.baseline.startTime) / 1000, 0) / nPassed : 0;
+	const avgEaTime =
+		nPassed > 0 ? allPassed.reduce((s, p) => s + (p.ea.endTime - p.ea.startTime) / 1000, 0) / nPassed : 0;
+	const avgTimeSavedPct = avgBaseTime > 0 ? ((avgBaseTime - avgEaTime) / avgBaseTime) * 100 : 0;
+
 	// Fast aggregates (only all-passed runs)
 	const allPassedFast = allPassed.filter((p): p is RunPair & { fast: RunStats } => p.fast != null);
 	const avgFastEnergy =
@@ -1472,13 +1500,21 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			);
 		}
 		if (avgSavedPct > 0) {
+			const speedStr = avgTimeSavedPct > 0 ? `, ${avgTimeSavedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  \x1b[32m✓ Average energy savings: ${avgSavedPct.toFixed(0)}%, cost savings: ${avgCostSavedPct.toFixed(0)}%\x1b[0m`,
+				`  \x1b[32m✓ Average: ${avgSavedPct.toFixed(0)}% less energy, ${avgCostSavedPct.toFixed(0)}% lower cost${speedStr} — same quality outcome\x1b[0m`,
 			);
 		}
 		if (hasFast && avgFastSavedPct > 0) {
+			const avgFastTime =
+				allPassedFast.length > 0
+					? allPassedFast.reduce((s, p) => s + (p.fast.endTime - p.fast.startTime) / 1000, 0) /
+						allPassedFast.length
+					: 0;
+			const avgFastTimeSavedPct = avgBaseTime > 0 ? ((avgBaseTime - avgFastTime) / avgBaseTime) * 100 : 0;
+			const fastSpeedStr = avgFastTimeSavedPct > 0 ? `, ${avgFastTimeSavedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  \x1b[33m✓ Fast mode avg savings: ${avgFastSavedPct.toFixed(0)}% energy, ${avgFastCostSavedPct.toFixed(0)}% cost\x1b[0m`,
+				`  \x1b[33m✓ Fast mode avg: ${avgFastSavedPct.toFixed(0)}% less energy, ${avgFastCostSavedPct.toFixed(0)}% lower cost${fastSpeedStr}\x1b[0m`,
 			);
 		}
 	}
