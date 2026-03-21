@@ -59,21 +59,8 @@ import {
 
 // -- Models -------------------------------------------------------------------
 
-/**
- * Energy efficiency (tokens per joule) from portal.neuralwatt.com.
- * Used as fallback when the API does not return energy_joules.
- * Prefer API-reported energy_joules when available — these are approximations.
- */
-const TOKENS_PER_JOULE: Record<string, number> = {
-	"mistralai/Devstral-Small-2-24B-Instruct-2512": 22.35,
-	"Qwen/Qwen3.5-397B-A17B-FP8": 1.03,
-	"Qwen/Qwen3.5-35B-A3B": 27.51,
-	"openai/gpt-oss-20b": 0.5,
-	"moonshotai/Kimi-K2.5": 0.21,
-	"MiniMaxAI/MiniMax-M2.5": 0.5,
-	"kimi-k2.5-fast": 0.21,
-	"glm-5-fast": 0.5,
-};
+/** Track whether we've warned about missing energy telemetry this session. */
+let warnedMissingEnergy = false;
 
 /** Shared base for all NeuralWatt models. */
 const NW_BASE = {
@@ -187,7 +174,6 @@ const DISCRIMINATOR_CONFIG: DiscriminatorConfig = {
 	complex: { model: QWEN_MODEL },
 	medium: { model: DEVSTRAL_MODEL, briefMaxTokens: 4_096 },
 	simple: { model: GPT_OSS_MODEL, briefMaxTokens: 2_048 },
-	tokensPerJoule: TOKENS_PER_JOULE,
 	systemPrompt:
 		"You are a routing classifier for a four-tier coding AI system.\n" +
 		"Choose the CHEAPEST tier that can handle the task correctly:\n" +
@@ -501,8 +487,14 @@ const REPO_TSX = join(__dirname, "../../../../node_modules/.bin/tsx");
 function getEnergy(message: AssistantMessage, modelId: string): { joules: number; fromApi: boolean } {
 	const api = message.energy?.energy_joules;
 	if (api != null && api > 0) return { joules: api, fromApi: true };
-	const tokensPerJoule = TOKENS_PER_JOULE[modelId] ?? 1.0;
-	return { joules: message.usage.totalTokens / tokensPerJoule, fromApi: false };
+	if (!warnedMissingEnergy) {
+		warnedMissingEnergy = true;
+		console.error(
+			`\x1b[33m  ⚠ WARNING: No energy telemetry in API response for model "${modelId}".` +
+				`\n    Energy values will be reported as 0J. Use a Neuralwatt endpoint for accurate energy data.\x1b[0m`,
+		);
+	}
+	return { joules: 0, fromApi: false };
 }
 
 // -- Acceptance tests ---------------------------------------------------------
@@ -1565,6 +1557,17 @@ async function main(): Promise<void> {
 	console.log("╠══════════════════════════════════════════════════════════════════════╣");
 	console.log("║  Flags:  --runs N --reverse --budget N --static --fast --hard       ║");
 	console.log("╚══════════════════════════════════════════════════════════════════════╝");
+
+	// Warn about energy telemetry source
+	const allModels = [DEFAULT_MODEL, GPT_OSS_MODEL, DEVSTRAL_MODEL, QWEN_MODEL];
+	const nonNeuralwatt = allModels.filter((m) => m.provider !== "neuralwatt");
+	if (nonNeuralwatt.length > 0) {
+		console.log(
+			`\x1b[33m  ⚠ WARNING: ${nonNeuralwatt.length} model(s) are not from Neuralwatt and may not return` +
+				`\n    energy telemetry. Energy values for these models will be reported as 0J.` +
+				`\n    Models: ${nonNeuralwatt.map((m) => m.id).join(", ")}\x1b[0m`,
+		);
+	}
 
 	if (memSummary) {
 		console.log(memSummary);
