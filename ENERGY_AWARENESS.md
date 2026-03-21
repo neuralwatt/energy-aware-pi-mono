@@ -6,6 +6,7 @@ pi-mono, using Neuralwatt endpoints.
 ## Table of Contents
 
 - [Overview](#overview)
+- [Quickstart](#quickstart)
 - [Architecture](#architecture)
 - [Type System](#type-system)
 - [Provider Integration](#provider-integration)
@@ -34,6 +35,156 @@ The only difference is the active `RuntimePolicy`.
 
 When no policy is configured, the agent loop behaves identically to upstream
 pi-mono — all energy features are opt-in.
+
+---
+
+## Quickstart
+
+### What It Does
+
+Energy-aware mode gives AI agents a **energy budget** and a policy that
+automatically adapts behavior to stay within it. Instead of every model call
+using maximum parameters regardless of cost, the agent learns to spend energy
+where it matters and conserve where it doesn't.
+
+**Capabilities at a glance:**
+
+- **Per-request energy telemetry** — every LLM call reports joules consumed,
+  kWh, and server-side duration, attached directly to the response message
+- **Pluggable runtime policies** — swap between baseline (no intervention)
+  and energy-aware (adaptive 5-strategy chain) with a single config change
+- **Adaptive strategy chain** — as budget pressure rises, the policy
+  progressively reduces reasoning depth, caps output tokens, routes to
+  cheaper models, compacts context, and ultimately aborts if the budget is
+  exhausted
+- **Model routing** — automatically switches to the most cost-effective model
+  that still meets capability requirements (reasoning, image support)
+- **Structured telemetry** — JSONL telemetry records for every call, ready
+  for dashboards, auditing, or billing
+- **Benchmark harness** — compare baseline vs energy-aware mode side-by-side
+  with automated scoring and reporting
+
+### Potential Impact
+
+| Metric | Target | How |
+|--------|--------|-----|
+| Energy per task | **>=20% reduction** vs baseline | Reasoning reduction, token capping, model routing |
+| Success rate | **<=5% degradation** vs baseline | Strategies are progressive — light interventions first |
+| Cost per task | Proportional to energy savings | Cheaper models consume less energy and cost less |
+| Context efficiency | Reduced bloat under pressure | Compaction triggered when context exceeds 60% of window |
+| Observability | Full visibility into every decision | Human-readable reasons on every policy decision, JSONL telemetry |
+
+The key insight is that most agent turns don't need maximum reasoning or the
+most expensive model. Energy-aware mode uses the full budget where it counts
+(complex reasoning, tool orchestration) and conserves on routine turns
+(simple responses, status checks).
+
+### Quick Integration Guide
+
+**Step 1: Set your API key**
+
+```bash
+export NEURALWATT_API_KEY="your-key-here"
+```
+
+**Step 2: Create an energy-aware session** (3 lines of config)
+
+```typescript
+import { createAgentSession } from "@mariozechner/pi-coding-agent";
+import { EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
+
+const { session } = await createAgentSession({
+   model: getModel("neuralwatt", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
+   policy: new EnergyAwarePolicy(),
+   budget: { energy_budget_joules: 50 },
+   availableModels: [
+      getModel("neuralwatt", "Qwen/Qwen3.5-35B-A3B"),        // cheapest
+      getModel("neuralwatt", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
+      getModel("neuralwatt", "Qwen/Qwen3.5-397B-A17B-FP8"),  // most capable
+   ],
+});
+```
+
+That's it. The policy handles everything automatically:
+- Under 30% budget used: no intervention, full performance
+- 30-50%: reasoning depth reduced
+- 50-70%: output tokens capped, context compacted if bloated
+- 70-100%: routed to cheaper model
+- 100%+: agent stops with a clear reason
+
+**Step 3: Read energy data from responses** (optional)
+
+```typescript
+// After any agent interaction, energy is on the assistant message
+const lastMessage = session.agent.state.messages.at(-1);
+if (lastMessage?.role === "assistant" && lastMessage.energy) {
+   console.log(`Energy: ${lastMessage.energy.energy_joules.toFixed(2)} J`);
+   console.log(`Duration: ${lastMessage.energy.duration_seconds.toFixed(2)} s`);
+}
+```
+
+**Step 4: Run benchmarks** (optional)
+
+```bash
+# Compare both modes
+cd packages/benchmarks && node dist/cli.js run --compare
+
+# Live demo with energy meter
+npm run demo:coding -w packages/benchmarks
+```
+
+### Without the SDK
+
+If you're using the `Agent` class directly instead of `createAgentSession`:
+
+```typescript
+import { Agent, EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+
+const agent = new Agent({
+   initialState: { model, thinkingLevel: "high", ... },
+   policy: new EnergyAwarePolicy(),
+   availableModels: neuralwattModels,
+   budget: { energy_budget_joules: 100 },
+});
+```
+
+Or at the lowest level with `agentLoop()`:
+
+```typescript
+import { agentLoop } from "@mariozechner/pi-agent-core";
+
+const stream = agentLoop(prompts, context, {
+   model,
+   policy: new EnergyAwarePolicy(),
+   availableModels: neuralwattModels,
+   budget: { energy_budget_joules: 100 },
+   onCompact: async (messages) => yourCompactionLogic(messages),
+   convertToLlm: yourConverter,
+});
+```
+
+### Custom Policies
+
+Implement `RuntimePolicy` to create your own policy:
+
+```typescript
+import type { RuntimePolicy, PolicyContext, PolicyDecision, UsageWithEnergy } from "@mariozechner/pi-agent-core";
+
+const myPolicy: RuntimePolicy = {
+   name: "my-custom-policy",
+   beforeModelCall(ctx: PolicyContext): PolicyDecision {
+      // your logic — return {} for no intervention
+      if (ctx.consumedEnergy > 75) {
+         return { abort: true, reason: "Custom limit reached" };
+      }
+      return {};
+   },
+   afterModelCall(ctx: PolicyContext, usage: UsageWithEnergy): void {
+      // log, track, alert — whatever you need
+   },
+};
+```
 
 ---
 
