@@ -127,10 +127,25 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			};
 
 			for await (const chunk of openaiStream) {
+				// Inspect the raw chunk for energy fields that may be outside chunk.usage
+				const chunkAny = chunk as unknown as Record<string, unknown>;
+				if (chunkAny.energy_joules != null || chunkAny.energy_kwh != null) {
+					const ej = typeof chunkAny.energy_joules === "number" ? chunkAny.energy_joules : undefined;
+					const ek = typeof chunkAny.energy_kwh === "number" ? chunkAny.energy_kwh : undefined;
+					const ds = typeof chunkAny.duration_seconds === "number" ? chunkAny.duration_seconds : undefined;
+					if (ej !== undefined || ek !== undefined) {
+						output.energy = {
+							energy_joules: ej ?? (ek !== undefined ? ek * 3_600_000 : 0),
+							energy_kwh: ek ?? (ej !== undefined ? ej / 3_600_000 : 0),
+							duration_seconds: ds ?? 0,
+						};
+					}
+				}
+
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model);
 
-					// Parse energy telemetry from Neuralwatt (or other providers that include it)
+					// Parse energy telemetry from usage object (Neuralwatt or compatible providers)
 					const usageAny = chunk.usage as unknown as Record<string, unknown>;
 					const energyJoules = typeof usageAny.energy_joules === "number" ? usageAny.energy_joules : undefined;
 					const energyKwh = typeof usageAny.energy_kwh === "number" ? usageAny.energy_kwh : undefined;
