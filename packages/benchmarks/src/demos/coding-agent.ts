@@ -1478,6 +1478,17 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			console.log(
 				`  ${"est. cost".padEnd(taskCol)}  ${"".padEnd(10)}  ${`$${avgBaseCost.toFixed(4)}`.padEnd(10)}  ${`$${avgEaCost.toFixed(4)}`.padEnd(10)}  ${`$${avgFastCost.toFixed(4)}`.padEnd(10)}  ${`${avgCostSavedPct.toFixed(0)}%`.padEnd(6)}`,
 			);
+			const fmtTime = (s: number) => `${s.toFixed(0)}s`;
+			const fmtTimePct = (pct: number) => (pct > 0 ? `-${pct.toFixed(0)}%` : `+${Math.abs(pct).toFixed(0)}%`);
+			const avgFastTime =
+				allPassedFast.length > 0
+					? allPassedFast.reduce((s, p) => s + (p.fast.endTime - p.fast.startTime) / 1000, 0) /
+						allPassedFast.length
+					: 0;
+			const avgFastTimePct = avgBaseTime > 0 ? ((avgBaseTime - avgFastTime) / avgBaseTime) * 100 : 0;
+			console.log(
+				`  ${"wall time".padEnd(taskCol)}  ${"".padEnd(10)}  ${fmtTime(avgBaseTime).padEnd(10)}  ${`${fmtTime(avgEaTime)}  (${fmtTimePct(avgTimeSavedPct)})`.padEnd(10)}  ${`${fmtTime(avgFastTime)}  (${fmtTimePct(avgFastTimePct)})`.padEnd(10)}`,
+			);
 		}
 	} else {
 		console.log(
@@ -1492,6 +1503,11 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			);
 			console.log(
 				`  ${"est. cost".padEnd(taskCol)}  ${"".padEnd(10)}  ${`$${avgBaseCost.toFixed(4)}`.padEnd(10)}  ${`$${avgEaCost.toFixed(4)}`.padEnd(10)}  ${`${avgCostSavedPct.toFixed(0)}%`.padEnd(6)}`,
+			);
+			const fmtTime = (s: number) => `${s.toFixed(0)}s`;
+			const fmtTimePct = (pct: number) => (pct > 0 ? `-${pct.toFixed(0)}%` : `+${Math.abs(pct).toFixed(0)}%`);
+			console.log(
+				`  ${"wall time".padEnd(taskCol)}  ${"".padEnd(10)}  ${fmtTime(avgBaseTime).padEnd(10)}  ${`${fmtTime(avgEaTime)}  (${fmtTimePct(avgTimeSavedPct)})`.padEnd(10)}  ${`${avgTimeSavedPct.toFixed(0)}%`.padEnd(6)}`,
 			);
 		}
 	}
