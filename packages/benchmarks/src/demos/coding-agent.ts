@@ -753,16 +753,30 @@ async function runCodingAgent(
 
 		messages.push({ role: "user", content: prompt, timestamp: Date.now() });
 
-		const assistantMsg = await completeSimple(
-			effectiveModel,
-			{ systemPrompt: SYSTEM_PROMPT, messages },
-			{ apiKey, ...(turnMaxTokens ? { maxTokens: turnMaxTokens } : {}) },
-		);
-
-		// Detect API errors (completeSimple doesn't throw — returns stopReason: "error")
-		const errorMsg = (assistantMsg as unknown as Record<string, unknown>).errorMessage;
-		if (assistantMsg.stopReason === "error" || errorMsg) {
-			throw new Error(`API error (${effectiveModel.id}): ${errorMsg ?? "unknown"}`);
+		let assistantMsg: AssistantMessage | undefined;
+		let lastError: string | undefined;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const msg = await completeSimple(
+				effectiveModel,
+				{ systemPrompt: SYSTEM_PROMPT, messages },
+				{ apiKey, ...(turnMaxTokens ? { maxTokens: turnMaxTokens } : {}) },
+			);
+			const errorMsg = (msg as unknown as Record<string, unknown>).errorMessage;
+			if (msg.stopReason === "error" || errorMsg) {
+				lastError = `${errorMsg ?? "unknown"}`;
+				if (attempt < 2) {
+					console.log(
+						`  \x1b[33m⚠ API error (${effectiveModel.id}): ${lastError} — retrying (${attempt + 1}/3)…\x1b[0m`,
+					);
+					await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+				}
+			} else {
+				assistantMsg = msg;
+				break;
+			}
+		}
+		if (!assistantMsg) {
+			throw new Error(`API error (${effectiveModel.id}): ${lastError} (after 3 attempts)`);
 		}
 
 		messages.push(assistantMsg);
@@ -1646,25 +1660,33 @@ async function main(): Promise<void> {
 		let eaStats: RunStats;
 		let fastStats: RunStats | undefined;
 
-		if (order === "baseline-first") {
-			baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
-			eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
-		} else {
-			eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
-			baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+		try {
+			if (order === "baseline-first") {
+				baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+				eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
+			} else {
+				eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
+				baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+			}
+
+			if (enableFast) {
+				fastStats = await runCodingAgent("fast", config, mem, apiKey, budgetJ);
+			}
+
+			const runLabel = numRuns > 1 ? `(Run ${i + 1}/${numRuns})` : "";
+			printScorecard(baselineStats, eaStats, config, budgetJ, runLabel, fastStats);
+
+			updateCodingMemory(mem, baselineStats, eaStats);
+			saveMemory(mem);
+
+			pairs.push({ runIndex: i, order, config, baseline: baselineStats, ea: eaStats, fast: fastStats });
+		} catch (err) {
+			console.error(
+				`\n  \x1b[31m✗ Run ${i + 1}/${numRuns} failed: ${err instanceof Error ? err.message : String(err)}\x1b[0m`,
+			);
+			if (numRuns === 1) throw err; // re-throw for single runs
+			console.log("  Skipping to next run…\n");
 		}
-
-		if (enableFast) {
-			fastStats = await runCodingAgent("fast", config, mem, apiKey, budgetJ);
-		}
-
-		const runLabel = numRuns > 1 ? `(Run ${i + 1}/${numRuns})` : "";
-		printScorecard(baselineStats, eaStats, config, budgetJ, runLabel, fastStats);
-
-		updateCodingMemory(mem, baselineStats, eaStats);
-		saveMemory(mem);
-
-		pairs.push({ runIndex: i, order, config, baseline: baselineStats, ea: eaStats, fast: fastStats });
 	}
 
 	if (numRuns > 1) {
