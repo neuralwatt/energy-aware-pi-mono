@@ -28,7 +28,6 @@ function fullConfig(): DiscriminatorConfig {
 		complex: { model: mockModel("complex-model", "Complex", ["tool_calling"]) },
 		medium: { model: mockModel("medium-model", "Medium", ["tool_calling"]), briefMaxTokens: 4_096 },
 		simple: { model: mockModel("simple-model", "Simple", []), briefMaxTokens: 2_048 },
-		tokensPerJoule: { classifier: 1.0 },
 	};
 }
 
@@ -38,7 +37,6 @@ function minimalConfig(): DiscriminatorConfig {
 		classifierModel: mockModel("classifier", "Classifier"),
 		complex: { model: mockModel("complex-model", "Complex", ["tool_calling"]) },
 		simple: { model: mockModel("simple-model", "Simple", []) },
-		tokensPerJoule: {},
 	};
 }
 
@@ -184,7 +182,6 @@ describe("discriminate — requires: tool_calling", () => {
 			classifierModel: mockModel("classifier", "Classifier"),
 			complex: { model: mockModel("complex-model", "Complex", []) },
 			simple: { model: mockModel("simple-model", "Simple", []) },
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -241,7 +238,6 @@ describe("discriminate — fallback chain ordering", () => {
 			complex: { model: mockModel("complex-model", "Complex", []) },
 			medium: { model: mockModel("medium-model", "Medium", []) },
 			simple: { model: mockModel("simple-model", "Simple", []) },
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -258,7 +254,6 @@ describe("discriminate — fallback chain ordering", () => {
 			complex: { model: mockModel("complex-model", "Complex", []) },
 			medium: { model: mockModel("medium-model", "Medium", []) },
 			simple: { model: mockModel("simple-model", "Simple", ["tool_calling"]) },
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -276,7 +271,6 @@ describe("discriminate — fallback chain ordering", () => {
 			complex: { model: mockModel("complex-model", "Complex", ["tool_calling"]) },
 			medium: { model: mockModel("medium-model", "Medium", []) },
 			simple: { model: mockModel("simple-model", "Simple", []) },
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -294,7 +288,6 @@ describe("discriminate — fallback chain ordering", () => {
 			complex: { model: mockModel("complex-model", "Complex", []) },
 			medium: { model: mockModel("medium-model", "Medium", ["tool_calling"]) },
 			simple: { model: mockModel("simple-model", "Simple", []) },
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -317,7 +310,6 @@ describe("discriminate — models without capabilities field", () => {
 			simple: {
 				model: { ...mockModel("simple-model", "Simple"), capabilities: undefined } as Model<"openai-completions">,
 			},
-			tokensPerJoule: {},
 		};
 		// Without requires, undefined capabilities should work fine
 		const result = await discriminate("test", "hello", config, "", "key");
@@ -332,7 +324,6 @@ describe("discriminate — models without capabilities field", () => {
 			simple: {
 				model: { ...mockModel("simple-model", "Simple"), capabilities: undefined } as Model<"openai-completions">,
 			},
-			tokensPerJoule: {},
 		};
 		const result = await discriminate("test", "hello", config, "", "key", {
 			requires: ["tool_calling"],
@@ -455,12 +446,6 @@ describe("discriminate — Fugue tool_calling scenario", () => {
 				briefMaxTokens: 4_096,
 			},
 			simple: { model: mockModel("openai/gpt-oss-20b", "GPT-OSS 20B", []), briefMaxTokens: 2_048 },
-			tokensPerJoule: {
-				"openai/gpt-oss-20b": 0.5,
-				"mistralai/Devstral-Small-2-24B-Instruct-2512": 9.92,
-				"moonshotai/Kimi-K2.5": 0.21,
-				"Qwen/Qwen3.5-397B-A17B-FP8": 1.03,
-			},
 		};
 	}
 

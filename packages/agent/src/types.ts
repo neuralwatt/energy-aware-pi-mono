@@ -108,6 +108,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 	/** Energy/time budget for policy-driven budget enforcement. */
 	budget?: EnergyBudget;
+
+	/**
+	 * Called when the policy sets `shouldCompact: true`.
+	 * The caller is responsible for performing context compaction (e.g. summarizing
+	 * older messages) and returning the compacted message list.
+	 * If not provided, the `shouldCompact` signal is ignored.
+	 */
+	onCompact?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
 }
 
 /**

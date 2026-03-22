@@ -62,11 +62,6 @@ export interface DiscriminatorConfig {
 	 * Recommended: GPT-OSS-20B (1.371 tok/J, most energy-efficient).
 	 */
 	simple: DiscriminatorTierConfig;
-	/**
-	 * Energy efficiency in tokens per joule per model id.
-	 * Used as a fallback when the API does not return energy_joules.
-	 */
-	tokensPerJoule: Record<string, number>;
 	/** System prompt override. Uses DEFAULT_DISCRIMINATOR_SYSTEM_PROMPT if not set. */
 	systemPrompt?: string;
 }
@@ -245,9 +240,7 @@ export async function discriminate(
 			.join("")
 			.trim();
 
-		const api = msg.energy?.energy_joules;
-		const tokensPerJoule = config.tokensPerJoule[config.classifierModel.id] ?? 1.0;
-		const energyJ = api != null && api > 0 ? api : msg.usage.totalTokens / tokensPerJoule;
+		const energyJ = msg.energy?.energy_joules ?? 0;
 
 		// Parse JSON from classifier response
 		let parsed: { tier?: string; length?: string; reason?: string } = {};

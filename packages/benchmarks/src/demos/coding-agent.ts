@@ -59,21 +59,8 @@ import {
 
 // -- Models -------------------------------------------------------------------
 
-/**
- * Energy efficiency (tokens per joule) from portal.neuralwatt.com.
- * Used as fallback when the API does not return energy_joules.
- * Prefer API-reported energy_joules when available — these are approximations.
- */
-const TOKENS_PER_JOULE: Record<string, number> = {
-	"mistralai/Devstral-Small-2-24B-Instruct-2512": 22.35,
-	"Qwen/Qwen3.5-397B-A17B-FP8": 1.03,
-	"Qwen/Qwen3.5-35B-A3B": 27.51,
-	"openai/gpt-oss-20b": 0.5,
-	"moonshotai/Kimi-K2.5": 0.21,
-	"MiniMaxAI/MiniMax-M2.5": 0.5,
-	"kimi-k2.5-fast": 0.21,
-	"glm-5-fast": 0.5,
-};
+/** Track whether we've warned about missing energy telemetry this session. */
+let warnedMissingEnergy = false;
 
 /** Shared base for all NeuralWatt models. */
 const NW_BASE = {
@@ -187,7 +174,6 @@ const DISCRIMINATOR_CONFIG: DiscriminatorConfig = {
 	complex: { model: QWEN_MODEL },
 	medium: { model: DEVSTRAL_MODEL, briefMaxTokens: 4_096 },
 	simple: { model: GPT_OSS_MODEL, briefMaxTokens: 2_048 },
-	tokensPerJoule: TOKENS_PER_JOULE,
 	systemPrompt:
 		"You are a routing classifier for a four-tier coding AI system.\n" +
 		"Choose the CHEAPEST tier that can handle the task correctly:\n" +
@@ -501,8 +487,14 @@ const REPO_TSX = join(__dirname, "../../../../node_modules/.bin/tsx");
 function getEnergy(message: AssistantMessage, modelId: string): { joules: number; fromApi: boolean } {
 	const api = message.energy?.energy_joules;
 	if (api != null && api > 0) return { joules: api, fromApi: true };
-	const tokensPerJoule = TOKENS_PER_JOULE[modelId] ?? 1.0;
-	return { joules: message.usage.totalTokens / tokensPerJoule, fromApi: false };
+	if (!warnedMissingEnergy) {
+		warnedMissingEnergy = true;
+		console.error(
+			`\x1b[33m  ⚠ WARNING: No energy telemetry in API response for model "${modelId}".` +
+				`\n    Energy values will be reported as 0J. Use a Neuralwatt endpoint for accurate energy data.\x1b[0m`,
+		);
+	}
+	return { joules: 0, fromApi: false };
 }
 
 // -- Acceptance tests ---------------------------------------------------------
@@ -761,16 +753,30 @@ async function runCodingAgent(
 
 		messages.push({ role: "user", content: prompt, timestamp: Date.now() });
 
-		const assistantMsg = await completeSimple(
-			effectiveModel,
-			{ systemPrompt: SYSTEM_PROMPT, messages },
-			{ apiKey, ...(turnMaxTokens ? { maxTokens: turnMaxTokens } : {}) },
-		);
-
-		// Detect API errors (completeSimple doesn't throw — returns stopReason: "error")
-		const errorMsg = (assistantMsg as unknown as Record<string, unknown>).errorMessage;
-		if (assistantMsg.stopReason === "error" || errorMsg) {
-			throw new Error(`API error (${effectiveModel.id}): ${errorMsg ?? "unknown"}`);
+		let assistantMsg: AssistantMessage | undefined;
+		let lastError: string | undefined;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const msg = await completeSimple(
+				effectiveModel,
+				{ systemPrompt: SYSTEM_PROMPT, messages },
+				{ apiKey, ...(turnMaxTokens ? { maxTokens: turnMaxTokens } : {}) },
+			);
+			const errorMsg = (msg as unknown as Record<string, unknown>).errorMessage;
+			if (msg.stopReason === "error" || errorMsg) {
+				lastError = `${errorMsg ?? "unknown"}`;
+				if (attempt < 2) {
+					console.log(
+						`  \x1b[33m⚠ API error (${effectiveModel.id}): ${lastError} — retrying (${attempt + 1}/3)…\x1b[0m`,
+					);
+					await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+				}
+			} else {
+				assistantMsg = msg;
+				break;
+			}
+		}
+		if (!assistantMsg) {
+			throw new Error(`API error (${effectiveModel.id}): ${lastError} (after 3 attempts)`);
 		}
 
 		messages.push(assistantMsg);
@@ -1146,11 +1152,16 @@ function printScorecard(
 
 	console.log("");
 	// Summary line for each mode — account for quality differences
+	const timeSaved = timeDelta < 0 ? Math.abs(timeDelta) : 0;
+	const fastTimeSaved =
+		hasFast && baseTime > 0 ? Math.max(0, ((baseTime - (fast.endTime - fast.startTime) / 1000) / baseTime) * 100) : 0;
+
 	const fmtSummary = (
 		label: string,
 		color: string,
 		saved: number,
 		costPct: number,
+		speedPct: number,
 		passed: boolean | undefined,
 		baselinePassed: boolean | undefined,
 	): void => {
@@ -1158,15 +1169,32 @@ function printScorecard(
 			console.log(`  \x1b[31m✗ ${label}: ${saved.toFixed(0)}% less energy but FAILED (baseline passed)\x1b[0m`);
 		} else if (saved > 0) {
 			const qualitySame = baselinePassed === true && passed === true ? " — same quality outcome" : "";
+			const speedStr = speedPct > 0 ? `, ${speedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  ${color}✓ ${label}: ${saved.toFixed(0)}% less energy, ${costPct.toFixed(0)}% lower cost${qualitySame}\x1b[0m`,
+				`  ${color}✓ ${label}: ${saved.toFixed(0)}% less energy, ${costPct.toFixed(0)}% lower cost${speedStr}${qualitySame}\x1b[0m`,
 			);
 		}
 	};
 
-	fmtSummary("Energy-aware", "\x1b[32m", energySaved, costSaved, energyAware.testPassed, baseline.testPassed);
+	fmtSummary(
+		"Energy-aware",
+		"\x1b[32m",
+		energySaved,
+		costSaved,
+		timeSaved,
+		energyAware.testPassed,
+		baseline.testPassed,
+	);
 	if (hasFast) {
-		fmtSummary("Fast mode", "\x1b[33m", fastEnergySaved, fastCostSaved, fast.testPassed, baseline.testPassed);
+		fmtSummary(
+			"Fast mode",
+			"\x1b[33m",
+			fastEnergySaved,
+			fastCostSaved,
+			fastTimeSaved,
+			fast.testPassed,
+			baseline.testPassed,
+		);
 	}
 }
 
@@ -1358,6 +1386,12 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 	const avgEaCost = nPassed > 0 ? allPassed.reduce((s, p) => s + estimateCost(p.ea.turns), 0) / nPassed : 0;
 	const avgCostSavedPct = avgBaseCost > 0 ? ((avgBaseCost - avgEaCost) / avgBaseCost) * 100 : 0;
 
+	const avgBaseTime =
+		nPassed > 0 ? allPassed.reduce((s, p) => s + (p.baseline.endTime - p.baseline.startTime) / 1000, 0) / nPassed : 0;
+	const avgEaTime =
+		nPassed > 0 ? allPassed.reduce((s, p) => s + (p.ea.endTime - p.ea.startTime) / 1000, 0) / nPassed : 0;
+	const avgTimeSavedPct = avgBaseTime > 0 ? ((avgBaseTime - avgEaTime) / avgBaseTime) * 100 : 0;
+
 	// Fast aggregates (only all-passed runs)
 	const allPassedFast = allPassed.filter((p): p is RunPair & { fast: RunStats } => p.fast != null);
 	const avgFastEnergy =
@@ -1444,6 +1478,17 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			console.log(
 				`  ${"est. cost".padEnd(taskCol)}  ${"".padEnd(10)}  ${`$${avgBaseCost.toFixed(4)}`.padEnd(10)}  ${`$${avgEaCost.toFixed(4)}`.padEnd(10)}  ${`$${avgFastCost.toFixed(4)}`.padEnd(10)}  ${`${avgCostSavedPct.toFixed(0)}%`.padEnd(6)}`,
 			);
+			const fmtTime = (s: number) => `${s.toFixed(0)}s`;
+			const fmtTimePct = (pct: number) => (pct > 0 ? `-${pct.toFixed(0)}%` : `+${Math.abs(pct).toFixed(0)}%`);
+			const avgFastTime =
+				allPassedFast.length > 0
+					? allPassedFast.reduce((s, p) => s + (p.fast.endTime - p.fast.startTime) / 1000, 0) /
+						allPassedFast.length
+					: 0;
+			const avgFastTimePct = avgBaseTime > 0 ? ((avgBaseTime - avgFastTime) / avgBaseTime) * 100 : 0;
+			console.log(
+				`  ${"wall time".padEnd(taskCol)}  ${"".padEnd(10)}  ${fmtTime(avgBaseTime).padEnd(10)}  ${`${fmtTime(avgEaTime)}  (${fmtTimePct(avgTimeSavedPct)})`.padEnd(10)}  ${`${fmtTime(avgFastTime)}  (${fmtTimePct(avgFastTimePct)})`.padEnd(10)}`,
+			);
 		}
 	} else {
 		console.log(
@@ -1458,6 +1503,11 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			);
 			console.log(
 				`  ${"est. cost".padEnd(taskCol)}  ${"".padEnd(10)}  ${`$${avgBaseCost.toFixed(4)}`.padEnd(10)}  ${`$${avgEaCost.toFixed(4)}`.padEnd(10)}  ${`${avgCostSavedPct.toFixed(0)}%`.padEnd(6)}`,
+			);
+			const fmtTime = (s: number) => `${s.toFixed(0)}s`;
+			const fmtTimePct = (pct: number) => (pct > 0 ? `-${pct.toFixed(0)}%` : `+${Math.abs(pct).toFixed(0)}%`);
+			console.log(
+				`  ${"wall time".padEnd(taskCol)}  ${"".padEnd(10)}  ${fmtTime(avgBaseTime).padEnd(10)}  ${`${fmtTime(avgEaTime)}  (${fmtTimePct(avgTimeSavedPct)})`.padEnd(10)}  ${`${avgTimeSavedPct.toFixed(0)}%`.padEnd(6)}`,
 			);
 		}
 	}
@@ -1480,13 +1530,21 @@ function printAggregateScorecard(pairs: RunPair[]): void {
 			);
 		}
 		if (avgSavedPct > 0) {
+			const speedStr = avgTimeSavedPct > 0 ? `, ${avgTimeSavedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  \x1b[32m✓ Average energy savings: ${avgSavedPct.toFixed(0)}%, cost savings: ${avgCostSavedPct.toFixed(0)}%\x1b[0m`,
+				`  \x1b[32m✓ Average: ${avgSavedPct.toFixed(0)}% less energy, ${avgCostSavedPct.toFixed(0)}% lower cost${speedStr} — same quality outcome\x1b[0m`,
 			);
 		}
 		if (hasFast && avgFastSavedPct > 0) {
+			const avgFastTime =
+				allPassedFast.length > 0
+					? allPassedFast.reduce((s, p) => s + (p.fast.endTime - p.fast.startTime) / 1000, 0) /
+						allPassedFast.length
+					: 0;
+			const avgFastTimeSavedPct = avgBaseTime > 0 ? ((avgBaseTime - avgFastTime) / avgBaseTime) * 100 : 0;
+			const fastSpeedStr = avgFastTimeSavedPct > 0 ? `, ${avgFastTimeSavedPct.toFixed(0)}% faster` : "";
 			console.log(
-				`  \x1b[33m✓ Fast mode avg savings: ${avgFastSavedPct.toFixed(0)}% energy, ${avgFastCostSavedPct.toFixed(0)}% cost\x1b[0m`,
+				`  \x1b[33m✓ Fast mode avg: ${avgFastSavedPct.toFixed(0)}% less energy, ${avgFastCostSavedPct.toFixed(0)}% lower cost${fastSpeedStr}\x1b[0m`,
 			);
 		}
 	}
@@ -1510,14 +1568,15 @@ async function main(): Promise<void> {
 		allowPositionals: true,
 	});
 
+	if (values["clear-memory"]) {
+		clearMemory();
+		console.log("Memory cleared (~/.energy-demo-memory.json deleted).");
+		process.exit(0);
+	}
+
 	if (!process.env.NEURALWATT_API_KEY) {
 		console.error("NEURALWATT_API_KEY required");
 		process.exit(1);
-	}
-
-	if (values["clear-memory"]) {
-		clearMemory();
-		console.log("Memory cleared.");
 	}
 
 	registerBuiltInApiProviders();
@@ -1564,7 +1623,19 @@ async function main(): Promise<void> {
 	}
 	console.log("╠══════════════════════════════════════════════════════════════════════╣");
 	console.log("║  Flags:  --runs N --reverse --budget N --static --fast --hard       ║");
+	console.log("║          --clear-memory                                             ║");
 	console.log("╚══════════════════════════════════════════════════════════════════════╝");
+
+	// Warn about energy telemetry source
+	const allModels = [DEFAULT_MODEL, GPT_OSS_MODEL, DEVSTRAL_MODEL, QWEN_MODEL];
+	const nonNeuralwatt = allModels.filter((m) => m.provider !== "neuralwatt");
+	if (nonNeuralwatt.length > 0) {
+		console.log(
+			`\x1b[33m  ⚠ WARNING: ${nonNeuralwatt.length} model(s) are not from Neuralwatt and may not return` +
+				`\n    energy telemetry. Energy values for these models will be reported as 0J.` +
+				`\n    Models: ${nonNeuralwatt.map((m) => m.id).join(", ")}\x1b[0m`,
+		);
+	}
 
 	if (memSummary) {
 		console.log(memSummary);
@@ -1605,25 +1676,33 @@ async function main(): Promise<void> {
 		let eaStats: RunStats;
 		let fastStats: RunStats | undefined;
 
-		if (order === "baseline-first") {
-			baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
-			eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
-		} else {
-			eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
-			baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+		try {
+			if (order === "baseline-first") {
+				baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+				eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
+			} else {
+				eaStats = await runCodingAgent("energy-aware", config, mem, apiKey, budgetJ);
+				baselineStats = await runCodingAgent("baseline", config, mem, apiKey, budgetJ);
+			}
+
+			if (enableFast) {
+				fastStats = await runCodingAgent("fast", config, mem, apiKey, budgetJ);
+			}
+
+			const runLabel = numRuns > 1 ? `(Run ${i + 1}/${numRuns})` : "";
+			printScorecard(baselineStats, eaStats, config, budgetJ, runLabel, fastStats);
+
+			updateCodingMemory(mem, baselineStats, eaStats);
+			saveMemory(mem);
+
+			pairs.push({ runIndex: i, order, config, baseline: baselineStats, ea: eaStats, fast: fastStats });
+		} catch (err) {
+			console.error(
+				`\n  \x1b[31m✗ Run ${i + 1}/${numRuns} failed: ${err instanceof Error ? err.message : String(err)}\x1b[0m`,
+			);
+			if (numRuns === 1) throw err; // re-throw for single runs
+			console.log("  Skipping to next run…\n");
 		}
-
-		if (enableFast) {
-			fastStats = await runCodingAgent("fast", config, mem, apiKey, budgetJ);
-		}
-
-		const runLabel = numRuns > 1 ? `(Run ${i + 1}/${numRuns})` : "";
-		printScorecard(baselineStats, eaStats, config, budgetJ, runLabel, fastStats);
-
-		updateCodingMemory(mem, baselineStats, eaStats);
-		saveMemory(mem);
-
-		pairs.push({ runIndex: i, order, config, baseline: baselineStats, ea: eaStats, fast: fastStats });
 	}
 
 	if (numRuns > 1) {

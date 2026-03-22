@@ -130,14 +130,8 @@ const DEFAULT_BUDGET_JOULES = 50_000;
 /** Memory key for this routing pair. */
 const MEMORY_KEY = "kimi-k2.5→gpt-oss-20b";
 
-/** Energy efficiency (tokens per joule) from portal.neuralwatt.com. */
-const TOKENS_PER_JOULE: Record<string, number> = {
-	"mistralai/Devstral-Small-2-24B-Instruct-2512": 22.35,
-	"Qwen/Qwen3.5-397B-A17B-FP8": 1.03,
-	"openai/gpt-oss-20b": 0.5,
-	"moonshotai/Kimi-K2.5": 0.21,
-	"kimi-k2.5-fast": 0.21,
-};
+/** Track whether we've warned about missing energy telemetry this session. */
+let warnedMissingEnergy = false;
 
 /**
  * Discriminator config for the HN watcher.
@@ -154,7 +148,6 @@ const HN_DISCRIMINATOR_CONFIG: DiscriminatorConfig = {
 	complex: { model: DEVSTRAL_MODEL, briefMaxTokens: 8 }, // fallback if maxTier not applied
 	medium: { model: DEVSTRAL_MODEL, briefMaxTokens: 8 },
 	simple: { model: GPT_OSS_MODEL, briefMaxTokens: 8 },
-	tokensPerJoule: TOKENS_PER_JOULE,
 	systemPrompt:
 		"You are a routing classifier for a relevance-scoring pipeline.\n" +
 		"The task is always simple: score a HackerNews title's relevance to AI/ML as 0.0-1.0.\n" +
@@ -212,8 +205,14 @@ interface ScorePair {
 function getEnergy(message: AssistantMessage, modelId: string): number {
 	const api = message.energy?.energy_joules;
 	if (api != null && api > 0) return api;
-	const tokensPerJoule = TOKENS_PER_JOULE[modelId] ?? 1.0;
-	return message.usage.totalTokens / tokensPerJoule;
+	if (!warnedMissingEnergy) {
+		warnedMissingEnergy = true;
+		console.error(
+			`\x1b[33m  ⚠ WARNING: No energy telemetry in API response for model "${modelId}".` +
+				`\n    Energy values will be reported as 0J. Use a Neuralwatt endpoint for accurate energy data.\x1b[0m`,
+		);
+	}
+	return 0;
 }
 
 // -- HN API -------------------------------------------------------------------
@@ -841,15 +840,16 @@ async function main(): Promise<void> {
 		allowPositionals: true,
 	});
 
+	// Handle --clear-memory before anything else (no API key needed)
+	if (values["clear-memory"]) {
+		clearMemory();
+		console.log("Memory cleared (~/.energy-demo-memory.json deleted).");
+		process.exit(0);
+	}
+
 	if (!process.env.NEURALWATT_API_KEY) {
 		console.error("NEURALWATT_API_KEY required");
 		process.exit(1);
-	}
-
-	// Handle --clear-memory before anything else
-	if (values["clear-memory"]) {
-		clearMemory();
-		console.log("Memory cleared.");
 	}
 
 	const apiKey = process.env.NEURALWATT_API_KEY;
@@ -886,6 +886,17 @@ async function main(): Promise<void> {
 
 	const topIds = await fetchTopStoryIds();
 	console.log(`Found ${topIds.length} stories. Running for ${durationS}s with ${budgetJ}J budget per run.\n`);
+
+	// Warn about non-Neuralwatt models
+	const allModels = [GPT_OSS_MODEL, DEVSTRAL_MODEL];
+	const nonNeuralwatt = allModels.filter((m) => m.provider !== "neuralwatt");
+	if (nonNeuralwatt.length > 0) {
+		console.log(
+			`\x1b[33m  ⚠ WARNING: ${nonNeuralwatt.length} model(s) are not from Neuralwatt and may not return` +
+				`\n    energy telemetry. Energy values for these models will be reported as 0J.` +
+				`\n    Models: ${nonNeuralwatt.map((m) => m.id).join(", ")}\x1b[0m\n`,
+		);
+	}
 
 	const baselinePolicy = new BaselinePolicy();
 	const energyAwarePolicy = new EnergyAwarePolicy();

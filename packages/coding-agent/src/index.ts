@@ -171,7 +171,11 @@ export {
 	createReadOnlyTools,
 	createReadTool,
 	createWriteTool,
+	// Energy-aware types (re-exported from pi-agent-core / pi-ai)
+	type EnergyBudget,
+	type EnergyUsage,
 	type PromptTemplate,
+	type RuntimePolicy,
 	// Pre-built tools (use process.cwd())
 	readOnlyTools,
 } from "./core/sdk.js";

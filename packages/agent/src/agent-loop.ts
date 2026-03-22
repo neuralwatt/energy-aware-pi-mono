@@ -202,6 +202,44 @@ async function runLoop(
 				}
 			}
 
+			// Handle compaction if policy requested it
+			if (policyDecision?.shouldCompact && config.onCompact) {
+				try {
+					currentContext.messages = await config.onCompact(currentContext.messages);
+				} catch (err) {
+					const compactErrorMessage: AssistantMessage = {
+						role: "assistant",
+						content: [
+							{
+								type: "text",
+								text: "Compaction failed: " + (err instanceof Error ? err.message : String(err)),
+							},
+						],
+						api: config.model.api,
+						provider: config.model.provider,
+						model: config.model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "error",
+						timestamp: Date.now(),
+					};
+					currentContext.messages.push(compactErrorMessage);
+					newMessages.push(compactErrorMessage);
+					stream.push({ type: "message_start", message: compactErrorMessage });
+					stream.push({ type: "message_end", message: compactErrorMessage });
+					stream.push({ type: "turn_end", message: compactErrorMessage, toolResults: [] });
+					stream.push({ type: "agent_end", messages: newMessages });
+					stream.end(newMessages);
+					return;
+				}
+			}
+
 			// Stream assistant response
 			const message = await streamAssistantResponse(
 				currentContext,
