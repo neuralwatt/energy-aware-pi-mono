@@ -1,7 +1,7 @@
 # OpenClaw Integration: Energy Awareness
 
 This document tracks the work needed to bring energy awareness features from
-`energy-aware-pi-mono` into the [openclaw](~/dev/openclaw) project.
+`energy-aware-pi-mono` into the `openclaw` project.
 
 ## Background
 

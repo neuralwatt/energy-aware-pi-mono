@@ -346,9 +346,10 @@ interface EnergyRef {
  * Returns the parsed EnergyUsage or undefined if the line isn't an energy comment.
  */
 function parseEnergyComment(line: string): EnergyUsage | undefined {
-	if (!line.startsWith(": energy ")) return undefined;
+	const trimmed = line.trimEnd();
+	if (!trimmed.startsWith(": energy ")) return undefined;
 	try {
-		const data = JSON.parse(line.slice(9)) as Record<string, unknown>;
+		const data = JSON.parse(trimmed.slice(9)) as Record<string, unknown>;
 		const ej = typeof data.energy_joules === "number" ? data.energy_joules : undefined;
 		const ek = typeof data.energy_kwh === "number" ? data.energy_kwh : undefined;
 		const ds = typeof data.duration_seconds === "number" ? data.duration_seconds : undefined;

@@ -821,19 +821,9 @@ npm run demo:coding -w packages/benchmarks
 Runs a real coding agent task in both modes with a live energy meter showing
 budget pressure, strategy activations, and model routing in real-time.
 
-Includes per-model energy efficiency reference data (tokens/joule):
-
-| Model | Tokens/Joule |
-|-------|-------------|
-| `Qwen/Qwen3.5-35B-A3B` | 27.51 |
-| `mistralai/Devstral-Small-2-24B-Instruct-2512` | 22.35 |
-| `Qwen/Qwen3.5-397B-A17B-FP8` | 1.03 |
-| `openai/gpt-oss-20b` | 0.50 |
-| `MiniMaxAI/MiniMax-M2.5` | 0.50 |
-| `moonshotai/Kimi-K2.5` | 0.21 |
-
-These are approximations from `portal.neuralwatt.com`. Prefer API-reported
-`energy_joules` when available.
+Energy consumption is reported from real API telemetry (`energy_joules` in the
+Neuralwatt SSE stream). If a run returns no energy data a warning is printed and
+that run is recorded as 0 J.
 
 ### Demo 2: HackerNews Energy-Aware Watcher
 
