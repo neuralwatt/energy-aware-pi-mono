@@ -20,6 +20,13 @@ npm run demo:hn -w packages/benchmarks
 
 Both demos require `NEURALWATT_API_KEY` to be set. They are designed to inspire thinking and to show what is possible with energy awareness.
 
+Pass flags after a `--` separator (required by npm to forward args to the script):
+```bash
+npm run demo:coding -w packages/benchmarks -- --runs 4 --hard
+npm run demo:coding -w packages/benchmarks -- --clear-memory
+npm run demo:hn -w packages/benchmarks -- --duration 60 --fast
+```
+
 # Energy Observability
 The energy data coming back from the supported APIs is useful for billing, dashboards and compliance.  Paired with location information (available from 
 info@neuralwatt.com on request) it can also be used for Scope 3 carbon accounting.
