@@ -11,7 +11,8 @@
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
 		"demo:coding": "npx tsx src/demos/coding-agent.ts",
-		"demo:hn": "npx tsx src/demos/hn-watcher.ts"
+		"demo:hn": "npx tsx src/demos/hn-watcher.ts",
+		"demo:compare": "npx tsx src/demos/model-compare.ts"
 	},
 	"dependencies": {
 		"@mariozechner/pi-agent-core": "npm:@neuralwatt/pi-agent-core@*",
