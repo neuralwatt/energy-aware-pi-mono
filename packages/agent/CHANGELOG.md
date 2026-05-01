@@ -24,6 +24,8 @@
 - **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. Use `buildAssistantMessage()` from `@mariozechner/pi-ai` instead of object literals.
 - The `onCompact` callback replaces the previous silent ignore of `shouldCompact` — callers should wire this to their existing compaction mechanism.
 
+## [0.71.1] - 2026-05-01
+
 ## [0.71.0] - 2026-04-30
 
 ## [0.70.6] - 2026-04-28

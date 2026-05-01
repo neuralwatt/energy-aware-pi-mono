@@ -17,6 +17,12 @@
 
 - **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. openclaw's `buildAssistantMessage()` in `stream-message-shared.ts` is affected — it explicitly constructs objects with fixed fields and drops `energy`.
 
+## [0.71.1] - 2026-05-01
+
+### Added
+
+- Added `websocket-cached` transport support for OpenAI Codex Responses used with ChatGPT subscription auth. This keeps the same WebSocket open for a session and, after the first request, sends only new conversation items instead of resending the full chat history when possible.
+
 ## [0.71.0] - 2026-04-30
 
 ### Breaking Changes
