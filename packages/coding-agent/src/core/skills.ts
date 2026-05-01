@@ -1,10 +1,12 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import { canonicalizePath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -75,7 +77,7 @@ export interface Skill {
 	description: string;
 	filePath: string;
 	baseDir: string;
-	source: string;
+	sourceInfo: SourceInfo;
 	disableModelInvocation: boolean;
 }
 
@@ -136,12 +138,37 @@ export interface LoadSkillsFromDirOptions {
 	source: string;
 }
 
+function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
+	switch (source) {
+		case "user":
+			return createSyntheticSourceInfo(filePath, {
+				source: "local",
+				scope: "user",
+				baseDir,
+			});
+		case "project":
+			return createSyntheticSourceInfo(filePath, {
+				source: "local",
+				scope: "project",
+				baseDir,
+			});
+		case "path":
+			return createSyntheticSourceInfo(filePath, {
+				source: "local",
+				baseDir,
+			});
+		default:
+			return createSyntheticSourceInfo(filePath, { source, baseDir });
+	}
+}
+
 /**
  * Load skills from a directory.
  *
  * Discovery rules:
- * - direct .md children in the root
- * - recursive SKILL.md under subdirectories
+ * - if a directory contains SKILL.md, treat it as a skill root and do not recurse further
+ * - otherwise, load direct .md children in the root
+ * - recurse into subdirectories to find SKILL.md
  */
 export function loadSkillsFromDir(options: LoadSkillsFromDirOptions): LoadSkillsResult {
 	const { dir, source } = options;
@@ -168,6 +195,35 @@ function loadSkillsFromDirInternal(
 
 	try {
 		const entries = readdirSync(dir, { withFileTypes: true });
+
+		for (const entry of entries) {
+			if (entry.name !== "SKILL.md") {
+				continue;
+			}
+
+			const fullPath = join(dir, entry.name);
+
+			let isFile = entry.isFile();
+			if (entry.isSymbolicLink()) {
+				try {
+					isFile = statSync(fullPath).isFile();
+				} catch {
+					continue;
+				}
+			}
+
+			const relPath = toPosixPath(relative(root, fullPath));
+			if (!isFile || ig.ignores(relPath)) {
+				continue;
+			}
+
+			const result = loadSkillFromFile(fullPath, source);
+			if (result.skill) {
+				skills.push(result.skill);
+			}
+			diagnostics.push(...result.diagnostics);
+			return { skills, diagnostics };
+		}
 
 		for (const entry of entries) {
 			if (entry.name.startsWith(".")) {
@@ -208,13 +264,7 @@ function loadSkillsFromDirInternal(
 				continue;
 			}
 
-			if (!isFile) {
-				continue;
-			}
-
-			const isRootMd = includeRootFiles && entry.name.endsWith(".md");
-			const isSkillMd = !includeRootFiles && entry.name === "SKILL.md";
-			if (!isRootMd && !isSkillMd) {
+			if (!isFile || !includeRootFiles || !entry.name.endsWith(".md")) {
 				continue;
 			}
 
@@ -267,7 +317,7 @@ function loadSkillFromFile(
 				description: frontmatter.description,
 				filePath,
 				baseDir: skillDir,
-				source,
+				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 			},
 			diagnostics,
@@ -325,14 +375,14 @@ function escapeXml(str: string): string {
 }
 
 export interface LoadSkillsOptions {
-	/** Working directory for project-local skills. Default: process.cwd() */
-	cwd?: string;
-	/** Agent config directory for global skills. Default: ~/.pi/agent */
-	agentDir?: string;
+	/** Working directory for project-local skills. */
+	cwd: string;
+	/** Agent config directory for global skills. */
+	agentDir: string;
 	/** Explicit skill paths (files or directories) */
-	skillPaths?: string[];
-	/** Include default skills directories. Default: true */
-	includeDefaults?: boolean;
+	skillPaths: string[];
+	/** Include default skills directories. */
+	includeDefaults: boolean;
 }
 
 function normalizePath(input: string): string {
@@ -352,8 +402,8 @@ function resolveSkillPath(p: string, cwd: string): string {
  * Load skills from all configured locations.
  * Returns skills and any validation diagnostics.
  */
-export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
-	const { cwd = process.cwd(), agentDir, skillPaths = [], includeDefaults = true } = options;
+export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
+	const { cwd, agentDir, skillPaths, includeDefaults } = options;
 
 	// Resolve agentDir - if not provided, use default from config
 	const resolvedAgentDir = agentDir ?? getAgentDir();
@@ -367,12 +417,7 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 		allDiagnostics.push(...result.diagnostics);
 		for (const skill of result.skills) {
 			// Resolve symlinks to detect duplicate files
-			let realPath: string;
-			try {
-				realPath = realpathSync(skill.filePath);
-			} catch {
-				realPath = skill.filePath;
-			}
+			const realPath = canonicalizePath(skill.filePath);
 
 			// Skip silently if we've already loaded this exact file (via symlink)
 			if (realPathSet.has(realPath)) {

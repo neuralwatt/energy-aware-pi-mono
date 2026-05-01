@@ -3,7 +3,7 @@ import {
 	Container,
 	type Focusable,
 	fuzzyFilter,
-	getEditorKeybindings,
+	getKeybindings,
 	Input,
 	Spacer,
 	Text,
@@ -93,7 +93,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.scopeHintText = new Text(this.getScopeHintText(), 0, 0);
 			this.addChild(this.scopeHintText);
 		} else {
-			const hintText = "Only showing models with configured API keys (see README for details)";
+			const hintText = "Only showing models from configured providers. Use /login to add providers.";
 			this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
 		}
 		this.addChild(new Spacer(1));
@@ -164,16 +164,20 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		}
 
 		this.allModels = this.sortModels(models);
-		this.scopedModelItems = this.sortModels(
-			this.scopedModels.map((scoped) => ({
-				provider: scoped.model.provider,
-				id: scoped.model.id,
-				model: scoped.model,
-			})),
-		);
+		this.scopedModels = this.scopedModels.map((scoped) => {
+			const refreshed = this.modelRegistry.find(scoped.model.provider, scoped.model.id);
+			return refreshed ? { ...scoped, model: refreshed } : scoped;
+		});
+		this.scopedModelItems = this.scopedModels.map((scoped) => ({
+			provider: scoped.model.provider,
+			id: scoped.model.id,
+			model: scoped.model,
+		}));
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
 		this.filteredModels = this.activeModels;
-		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
+		const currentIndex = this.filteredModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
+		this.selectedIndex =
+			currentIndex >= 0 ? currentIndex : Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
 	}
 
 	private sortModels(models: ModelItem[]): ModelItem[] {
@@ -196,14 +200,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	private getScopeHintText(): string {
-		return keyHint("tab", "scope") + theme.fg("muted", " (all/scoped)");
+		return keyHint("tui.input.tab", "scope") + theme.fg("muted", " (all/scoped)");
 	}
 
 	private setScope(scope: ModelScope): void {
 		if (this.scope === scope) return;
 		this.scope = scope;
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
-		this.selectedIndex = 0;
+		const currentIndex = this.activeModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
+		this.selectedIndex = currentIndex >= 0 ? currentIndex : 0;
 		this.filterModels(this.searchInput.getValue());
 		if (this.scopeText) {
 			this.scopeText.setText(this.getScopeText());
@@ -212,7 +217,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	private filterModels(query: string): void {
 		this.filteredModels = query
-			? fuzzyFilter(this.activeModels, query, ({ id, provider }) => `${id} ${provider}`)
+			? fuzzyFilter(
+					this.activeModels,
+					query,
+					({ id, provider }) => `${id} ${provider} ${provider}/${id} ${provider} ${id}`,
+				)
 			: this.activeModels;
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredModels.length - 1));
 		this.updateList();
@@ -276,8 +285,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "tab")) {
+		const kb = getKeybindings();
+		if (kb.matches(keyData, "tui.input.tab")) {
 			if (this.scopedModelItems.length > 0) {
 				const nextScope: ModelScope = this.scope === "all" ? "scoped" : "all";
 				this.setScope(nextScope);
@@ -288,26 +297,26 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			return;
 		}
 		// Up arrow - wrap to bottom when at top
-		if (kb.matches(keyData, "selectUp")) {
+		if (kb.matches(keyData, "tui.select.up")) {
 			if (this.filteredModels.length === 0) return;
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredModels.length - 1 : this.selectedIndex - 1;
 			this.updateList();
 		}
 		// Down arrow - wrap to top when at bottom
-		else if (kb.matches(keyData, "selectDown")) {
+		else if (kb.matches(keyData, "tui.select.down")) {
 			if (this.filteredModels.length === 0) return;
 			this.selectedIndex = this.selectedIndex === this.filteredModels.length - 1 ? 0 : this.selectedIndex + 1;
 			this.updateList();
 		}
 		// Enter
-		else if (kb.matches(keyData, "selectConfirm")) {
+		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selectedModel = this.filteredModels[this.selectedIndex];
 			if (selectedModel) {
 				this.handleSelect(selectedModel.model);
 			}
 		}
 		// Escape or Ctrl+C
-		else if (kb.matches(keyData, "selectCancel")) {
+		else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancelCallback();
 		}
 		// Pass everything else to search input

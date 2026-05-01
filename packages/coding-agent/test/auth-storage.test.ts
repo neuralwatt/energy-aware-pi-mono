@@ -30,6 +30,10 @@ describe("AuthStorage", () => {
 		writeFileSync(authJsonPath, JSON.stringify(data));
 	}
 
+	function toShPath(value: string): string {
+		return value.replace(/\\/g, "/").replace(/"/g, '\\"');
+	}
+
 	describe("API key resolution", () => {
 		test("literal API key is returned directly", async () => {
 			writeAuthJson({
@@ -161,7 +165,8 @@ describe("AuthStorage", () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
-				const command = `!sh -c 'count=$(cat ${counterFile}); echo $((count + 1)) > ${counterFile}; echo "key-value"'`;
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-value"'`;
 				writeAuthJson({
 					anthropic: { type: "api_key", key: command },
 				});
@@ -182,7 +187,8 @@ describe("AuthStorage", () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
-				const command = `!sh -c 'count=$(cat ${counterFile}); echo $((count + 1)) > ${counterFile}; echo "key-value"'`;
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-value"'`;
 				writeAuthJson({
 					anthropic: { type: "api_key", key: command },
 				});
@@ -203,7 +209,8 @@ describe("AuthStorage", () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
-				const command = `!sh -c 'count=$(cat ${counterFile}); echo $((count + 1)) > ${counterFile}; echo "key-value"'`;
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-value"'`;
 				writeAuthJson({
 					anthropic: { type: "api_key", key: command },
 				});
@@ -239,7 +246,8 @@ describe("AuthStorage", () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
-				const command = `!sh -c 'count=$(cat ${counterFile}); echo $((count + 1)) > ${counterFile}; exit 1'`;
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; exit 1'`;
 				writeAuthJson({
 					anthropic: { type: "api_key", key: command },
 				});
@@ -420,6 +428,26 @@ describe("AuthStorage", () => {
 
 			const secondDrain = authStorage.drainErrors();
 			expect(secondDrain).toHaveLength(0);
+		});
+	});
+
+	describe("auth status", () => {
+		test("does not expose stored API keys or OAuth tokens", () => {
+			authStorage = AuthStorage.inMemory({
+				anthropic: { type: "api_key", key: "secret-api-key" },
+				openai: {
+					type: "oauth",
+					access: "secret-access-token",
+					refresh: "secret-refresh-token",
+					expires: Date.now() + 1000,
+				},
+			});
+
+			expect(authStorage.getAuthStatus("anthropic")).toEqual({ configured: true, source: "stored" });
+			expect(authStorage.getAuthStatus("openai")).toEqual({ configured: true, source: "stored" });
+			expect(JSON.stringify(authStorage.getAuthStatus("anthropic"))).not.toContain("secret-api-key");
+			expect(JSON.stringify(authStorage.getAuthStatus("openai"))).not.toContain("secret-access-token");
+			expect(JSON.stringify(authStorage.getAuthStatus("openai"))).not.toContain("secret-refresh-token");
 		});
 	});
 

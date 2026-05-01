@@ -2,9 +2,225 @@
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-04-30
+
+### Fixed
+
+- Fixed `ProcessTerminal` to fall back to `COLUMNS` and `LINES` before defaulting to 80x24 dimensions ([#4004](https://github.com/badlogic/pi-mono/issues/4004))
+- Fixed editor rendering artifacts for Thai Sara Am and Lao AM vowel characters ([#3904](https://github.com/badlogic/pi-mono/issues/3904))
+
+## [0.70.6] - 2026-04-28
+
+## [0.70.5] - 2026-04-27
+
+## [0.70.4] - 2026-04-27
+
+## [0.70.3] - 2026-04-27
+
+### Fixed
+
+- Fixed duplicate printable characters from Kitty keyboard protocol CSI-u plus raw character input on layouts such as Italian ([#3780](https://github.com/badlogic/pi-mono/issues/3780))
+
+## [0.70.2] - 2026-04-24
+
+## [0.70.1] - 2026-04-24
+
+### Fixed
+
+- Fixed CSI-u Ctrl+letter decoding inside bracketed paste, so pasted modified-key escape sequences no longer become literal editor text ([#3623](https://github.com/badlogic/pi-mono/pull/3623) by [@Exrun94](https://github.com/Exrun94))
+
+## [0.70.0] - 2026-04-23
+
+### Fixed
+
+- Kept OSC 9;4 terminal progress alive with periodic updates so Ghostty does not clear the indicator during long-running agent work ([#3610](https://github.com/badlogic/pi-mono/issues/3610))
+
+## [0.69.0] - 2026-04-22
+
+### Added
+
+- Added `setProgress(active: boolean)` to the `Terminal` interface for OSC 9;4 progress indicator support
+- Added generic stacked autocomplete support for extension wrappers via `AutocompleteProvider.shouldTriggerFileCompletion?()` and `#` as a natural autocomplete trigger alongside `@` ([#2983](https://github.com/badlogic/pi-mono/issues/2983))
+
+## [0.68.1] - 2026-04-22
+
+### Fixed
+
+- Fixed `@` autocomplete fuzzy search to follow symlinked directories and include symlinked paths in results ([#3507](https://github.com/badlogic/pi-mono/issues/3507))
+
+## [0.68.0] - 2026-04-20
+
+### Added
+
+- Added `LoaderIndicatorOptions` and `Loader.setIndicator()` support for custom loader frames and animation intervals, allowing TUI consumers to use animated, static, or hidden loader indicators ([#3413](https://github.com/badlogic/pi-mono/issues/3413))
+
+### Fixed
+
+- Fixed `@` autocomplete fuzzy search to stop matching against the full base path for plain queries, so worktree or cwd paths containing the query text no longer crowd out real results such as `@plan` suggestions ([#2778](https://github.com/badlogic/pi-mono/issues/2778))
+- Fixed xterm `modifyOtherKeys` printable input so shifted uppercase letters insert correctly in the editor and shifted letter bindings parse and match consistently ([#3436](https://github.com/badlogic/pi-mono/issues/3436))
+
+## [0.67.68] - 2026-04-17
+
+## [0.67.67] - 2026-04-17
+
+## [0.67.6] - 2026-04-16
+
+### Added
+
+- Added OSC 8 hyperlink rendering for markdown links when the terminal advertises support. Introduces a public `hyperlink(text, url)` helper and a `setCapabilities()` test override in `packages/tui` ([#3248](https://github.com/badlogic/pi-mono/pull/3248) by [@ofa1](https://github.com/ofa1)).
+- Added `argumentHint` to `SlashCommand` interface, displayed before the description in the autocomplete dropdown ([#2780](https://github.com/badlogic/pi-mono/pull/2780) by [@andresvi94](https://github.com/andresvi94))
+
+### Changed
+
+- Tightened `detectCapabilities()` to default `hyperlinks: false` for unknown terminals and to force `hyperlinks: false` under tmux/screen (including nested sessions where the outer terminal would otherwise advertise OSC 8). Prevents markdown link URLs from disappearing on terminals that silently swallow OSC 8 sequences ([#3248](https://github.com/badlogic/pi-mono/pull/3248)).
+
+## [0.67.5] - 2026-04-16
+
+### Fixed
+
+- Fixed Zellij `Shift+Enter` regressions by reverting the Zellij-specific Kitty keyboard query bypass and restoring the previous keyboard negotiation behavior ([#3259](https://github.com/badlogic/pi-mono/issues/3259))
+
+## [0.67.4] - 2026-04-16
+
+### Fixed
+
+- Fixed markdown strikethrough parsing to require strict double-tilde delimiters (`~~text~~`) with non-whitespace boundaries, preventing accidental strikethrough from loose tilde usage.
+
+## [0.67.2] - 2026-04-14
+
+### Added
+
+- Added full helper support for Kitty `super`-modified shortcuts, including combinations such as `super+k`, `super+enter`, and `ctrl+super+k` ([#2979](https://github.com/badlogic/pi-mono/issues/2979))
+
+### Fixed
+
+- Fixed Ctrl+Alt letter key matching in tmux by falling through from legacy ESC-prefixed handling to CSI-u and xterm `modifyOtherKeys` parsing when the legacy form does not match ([#2989](https://github.com/badlogic/pi-mono/pull/2989) by [@kaofelix](https://github.com/kaofelix))
+
+## [0.67.1] - 2026-04-13
+
+## [0.67.0] - 2026-04-13
+
+### Fixed
+
+- Fixed `Container.render()` stack overflow on long sessions by replacing `Array.push(...spread)` with a loop-based push, preventing `RangeError: Maximum call stack size exceeded` when child output exceeds the V8 call stack argument limit ([#2651](https://github.com/badlogic/pi-mono/issues/2651))
+- Fixed editor sticky-column tracking around paste markers so vertical cursor navigation restores the column from before the cursor entered a paste marker instead of jumping inside or past pasted content ([#3092](https://github.com/badlogic/pi-mono/pull/3092) by [@Perlence](https://github.com/Perlence))
+- Fixed TUI test suite failures caused by render throttle scheduling: added `VirtualTerminal.waitForRender()` helper that waits for the 16ms throttled render pipeline to settle before asserting viewport state ([#3076](https://github.com/badlogic/pi-mono/pull/3076) by [@aliou](https://github.com/aliou))
+
+## [0.66.1] - 2026-04-08
+
+## [0.66.0] - 2026-04-08
+
+## [0.65.2] - 2026-04-06
+
+### Fixed
+
+- Fixed render scheduling under heavy streaming output by coalescing `requestRender()` calls to a 16ms frame budget while preserving immediate `requestRender(true)` behavior.
+
+## [0.65.1] - 2026-04-05
+
+## [0.65.0] - 2026-04-03
+
+### Fixed
+
+- Fixed markdown H1 headings ending with inline code from leaking underline styling into trailing line padding
+- Fixed slash-command argument autocomplete to await async `getArgumentCompletions()` results and ignore invalid return values, preventing crashes when extension commands provide asynchronous completions ([#2719](https://github.com/badlogic/pi-mono/issues/2719))
+- Fixed non-capturing overlay padding from inflating scrollback and corrupting the viewport on terminal widen ([#2758](https://github.com/badlogic/pi-mono/pull/2758) by [@dotBeeps](https://github.com/dotBeeps))
+
+## [0.64.0] - 2026-03-29
+
+### Fixed
+
+- Fixed TUI cell size response handling to consume only exact `CSI 6 ; height ; width t` replies, so bare `Escape` is no longer swallowed while waiting for terminal image metadata ([#2661](https://github.com/badlogic/pi-mono/issues/2661))
+- Fixed Kitty keyboard protocol keypad functional keys to normalize to logical digits, symbols, and navigation keys, so numpad input in terminals such as iTerm2 no longer inserts Private Use Area gibberish or gets ignored ([#2650](https://github.com/badlogic/pi-mono/issues/2650))
+
+## [0.63.2] - 2026-03-29
+
+## [0.63.1] - 2026-03-27
+
+## [0.63.0] - 2026-03-27
+
+### Added
+
+- Added support for `PI_TUI_WRITE_LOG` directory paths, creating a unique log file (`tui-<timestamp>-<pid>.log`) per instance for easier debugging of multiple pi sessions ([#2508](https://github.com/badlogic/pi-mono/pull/2508) by [@mrexodia](https://github.com/mrexodia))
+
+### Fixed
+
+- Fixed blockquote text color breaking after inline links (and other inline elements) due to missing style restoration prefix
+- Fixed slash-command Tab completion from immediately chaining into argument autocomplete after completing the command name, restoring flows like `/model` that submit into a selector dialog ([#2577](https://github.com/badlogic/pi-mono/issues/2577))
+- Fixed stale content and incorrect viewport tracking after TUI content shrinks or transient components inflate the working area ([#2126](https://github.com/badlogic/pi-mono/pull/2126) by [@Perlence](https://github.com/Perlence))
+- Fixed `@` autocomplete to debounce editor-triggered searches, cancel in-flight `fd` lookups cleanly, and keep suggestions visible while results refresh ([#1278](https://github.com/badlogic/pi-mono/issues/1278))
+
+
+## [0.62.0] - 2026-03-23
+
+### Fixed
+
+- Fixed `truncateToWidth()` to stream truncation for very large strings, keep contiguous prefixes, and always terminate truncated SGR styling safely ([#2447](https://github.com/badlogic/pi-mono/issues/2447))
+- Fixed markdown heading styling being lost after inline code spans within headings
+
+## [0.61.1] - 2026-03-20
+
+### Fixed
+
+- Fixed shared keybinding resolution to stop user overrides from evicting unrelated default shortcuts such as selector confirm and editor cursor keys ([#2455](https://github.com/badlogic/pi-mono/issues/2455))
+- Fixed Termux software keyboard height changes from forcing full-screen redraws and replaying TUI history on every toggle ([#2467](https://github.com/badlogic/pi-mono/issues/2467))
+
+## [0.61.0] - 2026-03-20
+
+### Breaking Changes
+
+- Replaced the editor-only keybinding store with a single global keybindings manager in `@mariozechner/pi-tui`. TUI keybinding ids are now namespaced: `cursorUp` -> `tui.editor.cursorUp`, `cursorDown` -> `tui.editor.cursorDown`, `cursorLeft` -> `tui.editor.cursorLeft`, `cursorRight` -> `tui.editor.cursorRight`, `cursorWordLeft` -> `tui.editor.cursorWordLeft`, `cursorWordRight` -> `tui.editor.cursorWordRight`, `cursorLineStart` -> `tui.editor.cursorLineStart`, `cursorLineEnd` -> `tui.editor.cursorLineEnd`, `jumpForward` -> `tui.editor.jumpForward`, `jumpBackward` -> `tui.editor.jumpBackward`, `pageUp` -> `tui.editor.pageUp`, `pageDown` -> `tui.editor.pageDown`, `deleteCharBackward` -> `tui.editor.deleteCharBackward`, `deleteCharForward` -> `tui.editor.deleteCharForward`, `deleteWordBackward` -> `tui.editor.deleteWordBackward`, `deleteWordForward` -> `tui.editor.deleteWordForward`, `deleteToLineStart` -> `tui.editor.deleteToLineStart`, `deleteToLineEnd` -> `tui.editor.deleteToLineEnd`, `yank` -> `tui.editor.yank`, `yankPop` -> `tui.editor.yankPop`, `undo` -> `tui.editor.undo`, `newLine` -> `tui.input.newLine`, `submit` -> `tui.input.submit`, `tab` -> `tui.input.tab`, `copy` -> `tui.input.copy`, `selectUp` -> `tui.select.up`, `selectDown` -> `tui.select.down`, `selectPageUp` -> `tui.select.pageUp`, `selectPageDown` -> `tui.select.pageDown`, `selectConfirm` -> `tui.select.confirm`, `selectCancel` -> `tui.select.cancel`. `keybindings.json` stays backward compatible because each keybinding definition maps the new internal id back to the existing public config key. Apps extend `interface Keybindings` via declaration merging, create one manager with both TUI and app definitions, then install it with `setKeybindings(...)` ([#2391](https://github.com/badlogic/pi-mono/issues/2391))
+
+### Fixed
+
+- Fixed user-defined keybindings to shadow conflicting default bindings across the shared registry, so app-level defaults no longer stay active when the same key is explicitly reassigned ([#2391](https://github.com/badlogic/pi-mono/issues/2391))
+
+## [0.60.0] - 2026-03-18
+
+### Fixed
+
+- Fixed tmux xterm `modifyOtherKeys` matching for `Backspace`, `Escape`, and `Space`, and resolved raw `\x08` backspace ambiguity by treating Windows Terminal sessions differently from legacy terminals ([#2293](https://github.com/badlogic/pi-mono/issues/2293))
+
+## [0.59.0] - 2026-03-17
+
+## [0.58.4] - 2026-03-16
+
+## [0.58.3] - 2026-03-15
+
+## [0.58.2] - 2026-03-15
+
+### Added
+
+- Added configurable `SelectList` primary column sizing via `SelectListLayoutOptions`, including custom primary-label truncation hooks ([#2154](https://github.com/badlogic/pi-mono/pull/2154) by [@markusylisiurunen](https://github.com/markusylisiurunen))
+
+### Fixed
+
+- Fixed stale scrollback remaining after full-screen redraws such as session switches by clearing the screen before wiping scrollback ([#2155](https://github.com/badlogic/pi-mono/pull/2155) by [@Perlence](https://github.com/Perlence))
+- Fixed trailing blank lines after markdown block elements when they are followed immediately by the next block or end of document ([#2152](https://github.com/badlogic/pi-mono/pull/2152) by [@markusylisiurunen](https://github.com/markusylisiurunen))
+
+## [0.58.1] - 2026-03-14
+
+### Fixed
+
+- Fixed Windows shell and path handling in autocomplete to properly handle drive letters and mixed path separators
+- Fixed editor paste to preserve literal content instead of normalizing newlines, preventing content corruption for text with embedded escape sequences ([#2064](https://github.com/badlogic/pi-mono/issues/2064))
+- Fixed tab completion to preserve `./` prefix when completing relative paths ([#2087](https://github.com/badlogic/pi-mono/issues/2087))
+- Fixed `ctrl+backspace` being indistinguishable from plain `backspace` on Windows Terminal. `0x08` is now recognized as `ctrl+backspace` instead of `backspace`, making `ctrl+backspace` bindable on terminals where it produces a distinct byte ([#2139](https://github.com/badlogic/pi-mono/issues/2139))
+
+## [0.58.0] - 2026-03-14
+
+### Added
+
+- Added paste marker atomic segment handling in editor, treating paste markers as indivisible units during word wrapping and cursor navigation ([#2111](https://github.com/badlogic/pi-mono/pull/2111) by [@haoqixu](https://github.com/haoqixu))
+
 ### Fixed
 
 - Fixed `Input` horizontal scrolling for wide Unicode text (CJK, fullwidth characters) to use visual column width and strict slice boundaries, preventing rendered line overflow and TUI crashes ([#1982](https://github.com/badlogic/pi-mono/issues/1982))
+- Fixed xterm `modifyOtherKeys` handling for `Tab` in `matchesKey()`, restoring `shift+tab` and other modified Tab bindings in tmux when `extended-keys-format` is left at the default `xterm`
+- Fixed editor scroll indicator rendering crash in narrow terminal widths ([#2103](https://github.com/badlogic/pi-mono/pull/2103) by [@haoqixu](https://github.com/haoqixu))
+- Fixed tab characters in editor `setText()` and input paths not being normalized to spaces ([#2027](https://github.com/badlogic/pi-mono/pull/2027) by [@haoqixu](https://github.com/haoqixu))
+- Fixed `wordWrapLine` overflow when wide characters (CJK, fullwidth) fall exactly at the wrap boundary ([#2082](https://github.com/badlogic/pi-mono/pull/2082) by [@haoqixu](https://github.com/haoqixu))
+- Fixed tab characters in `Input` paste not being normalized to spaces ([#1975](https://github.com/badlogic/pi-mono/pull/1975) by [@haoqixu](https://github.com/haoqixu))
 
 ## [0.57.1] - 2026-03-07
 

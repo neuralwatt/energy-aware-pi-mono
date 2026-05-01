@@ -1,4 +1,4 @@
-import { type Component, Container, getEditorKeybindings, Spacer, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, Container, getKeybindings, Spacer, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 
@@ -18,11 +18,12 @@ class UserMessageList implements Component {
 	public onCancel?: () => void;
 	private maxVisible: number = 10; // Max messages visible
 
-	constructor(messages: UserMessageItem[]) {
+	constructor(messages: UserMessageItem[], initialSelectedId?: string) {
 		// Store messages in chronological order (oldest to newest)
 		this.messages = messages;
-		// Start with the last (most recent) message selected
-		this.selectedIndex = Math.max(0, messages.length - 1);
+		const initialIndex = initialSelectedId ? messages.findIndex((message) => message.id === initialSelectedId) : -1;
+		// Start with selected message if provided, else default to the most recent
+		this.selectedIndex = initialIndex >= 0 ? initialIndex : Math.max(0, messages.length - 1);
 	}
 
 	invalidate(): void {
@@ -78,24 +79,24 @@ class UserMessageList implements Component {
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getEditorKeybindings();
+		const kb = getKeybindings();
 		// Up arrow - go to previous (older) message, wrap to bottom when at top
-		if (kb.matches(keyData, "selectUp")) {
+		if (kb.matches(keyData, "tui.select.up")) {
 			this.selectedIndex = this.selectedIndex === 0 ? this.messages.length - 1 : this.selectedIndex - 1;
 		}
 		// Down arrow - go to next (newer) message, wrap to top when at bottom
-		else if (kb.matches(keyData, "selectDown")) {
+		else if (kb.matches(keyData, "tui.select.down")) {
 			this.selectedIndex = this.selectedIndex === this.messages.length - 1 ? 0 : this.selectedIndex + 1;
 		}
 		// Enter - select message and branch
-		else if (kb.matches(keyData, "selectConfirm")) {
+		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.messages[this.selectedIndex];
 			if (selected && this.onSelect) {
 				this.onSelect(selected.id);
 			}
 		}
 		// Escape - cancel
-		else if (kb.matches(keyData, "selectCancel")) {
+		else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.onCancel) {
 				this.onCancel();
 			}
@@ -109,19 +110,30 @@ class UserMessageList implements Component {
 export class UserMessageSelectorComponent extends Container {
 	private messageList: UserMessageList;
 
-	constructor(messages: UserMessageItem[], onSelect: (entryId: string) => void, onCancel: () => void) {
+	constructor(
+		messages: UserMessageItem[],
+		onSelect: (entryId: string) => void,
+		onCancel: () => void,
+		initialSelectedId?: string,
+	) {
 		super();
 
 		// Add header
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.bold("Branch from Message"), 1, 0));
-		this.addChild(new Text(theme.fg("muted", "Select a message to create a new branch from that point"), 1, 0));
+		this.addChild(new Text(theme.bold("Fork from Message"), 1, 0));
+		this.addChild(
+			new Text(
+				theme.fg("muted", "Select a user message to copy the active path up to that point into a new session"),
+				1,
+				0,
+			),
+		);
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
 		// Create message list
-		this.messageList = new UserMessageList(messages);
+		this.messageList = new UserMessageList(messages, initialSelectedId);
 		this.messageList.onSelect = onSelect;
 		this.messageList.onCancel = onCancel;
 

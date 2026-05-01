@@ -37,6 +37,117 @@ const rgiEmojiRegex = /^\p{RGI_Emoji}$/v;
 const WIDTH_CACHE_SIZE = 512;
 const widthCache = new Map<string, number>();
 
+function isPrintableAscii(str: string): boolean {
+	for (let i = 0; i < str.length; i++) {
+		const code = str.charCodeAt(i);
+		if (code < 0x20 || code > 0x7e) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function truncateFragmentToWidth(text: string, maxWidth: number): { text: string; width: number } {
+	if (maxWidth <= 0 || text.length === 0) {
+		return { text: "", width: 0 };
+	}
+
+	if (isPrintableAscii(text)) {
+		const clipped = text.slice(0, maxWidth);
+		return { text: clipped, width: clipped.length };
+	}
+
+	const hasAnsi = text.includes("\x1b");
+	const hasTabs = text.includes("\t");
+	if (!hasAnsi && !hasTabs) {
+		let result = "";
+		let width = 0;
+		for (const { segment } of segmenter.segment(text)) {
+			const w = graphemeWidth(segment);
+			if (width + w > maxWidth) {
+				break;
+			}
+			result += segment;
+			width += w;
+		}
+		return { text: result, width };
+	}
+
+	let result = "";
+	let width = 0;
+	let i = 0;
+	let pendingAnsi = "";
+
+	while (i < text.length) {
+		const ansi = extractAnsiCode(text, i);
+		if (ansi) {
+			pendingAnsi += ansi.code;
+			i += ansi.length;
+			continue;
+		}
+
+		if (text[i] === "\t") {
+			if (width + 3 > maxWidth) {
+				break;
+			}
+			if (pendingAnsi) {
+				result += pendingAnsi;
+				pendingAnsi = "";
+			}
+			result += "\t";
+			width += 3;
+			i++;
+			continue;
+		}
+
+		let end = i;
+		while (end < text.length && text[end] !== "\t") {
+			const nextAnsi = extractAnsiCode(text, end);
+			if (nextAnsi) {
+				break;
+			}
+			end++;
+		}
+
+		for (const { segment } of segmenter.segment(text.slice(i, end))) {
+			const w = graphemeWidth(segment);
+			if (width + w > maxWidth) {
+				return { text: result, width };
+			}
+			if (pendingAnsi) {
+				result += pendingAnsi;
+				pendingAnsi = "";
+			}
+			result += segment;
+			width += w;
+		}
+		i = end;
+	}
+
+	return { text: result, width };
+}
+
+function finalizeTruncatedResult(
+	prefix: string,
+	prefixWidth: number,
+	ellipsis: string,
+	ellipsisWidth: number,
+	maxWidth: number,
+	pad: boolean,
+): string {
+	const reset = "\x1b[0m";
+	const visibleWidth = prefixWidth + ellipsisWidth;
+	let result: string;
+
+	if (ellipsis.length > 0) {
+		result = `${prefix}${reset}${ellipsis}${reset}`;
+	} else {
+		result = `${prefix}${reset}`;
+	}
+
+	return pad ? result + " ".repeat(Math.max(0, maxWidth - visibleWidth)) : result;
+}
+
 /**
  * Calculate the terminal width of a single grapheme cluster.
  * Based on code from the string-width library, but includes a possible-emoji
@@ -69,12 +180,14 @@ function graphemeWidth(segment: string): number {
 
 	let width = eastAsianWidth(cp);
 
-	// Trailing halfwidth/fullwidth forms
+	// Trailing halfwidth/fullwidth forms and AM vowels that segment with a base.
 	if (segment.length > 1) {
 		for (const char of segment.slice(1)) {
 			const c = char.codePointAt(0)!;
 			if (c >= 0xff00 && c <= 0xffef) {
 				width += eastAsianWidth(c);
+			} else if (c === 0x0e33 || c === 0x0eb3) {
+				width += 1;
 			}
 		}
 	}
@@ -91,15 +204,7 @@ export function visibleWidth(str: string): number {
 	}
 
 	// Fast path: pure ASCII printable
-	let isPureAscii = true;
-	for (let i = 0; i < str.length; i++) {
-		const code = str.charCodeAt(i);
-		if (code < 0x20 || code > 0x7e) {
-			isPureAscii = false;
-			break;
-		}
-	}
-	if (isPureAscii) {
+	if (isPrintableAscii(str)) {
 		return str.length;
 	}
 
@@ -148,6 +253,20 @@ export function visibleWidth(str: string): number {
 	widthCache.set(str, width);
 
 	return width;
+}
+
+/**
+ * Normalize text for terminal output without changing logical editor content.
+ * Some terminals render precomposed Thai/Lao AM vowels inconsistently during
+ * differential repaint. Their compatibility decompositions have the same cell
+ * width but avoid stale-cell artifacts in terminal renderers.
+ */
+const THAI_LAO_AM_REGEX = /[\u0e33\u0eb3]/;
+const THAI_LAO_AM_GLOBAL_REGEX = /[\u0e33\u0eb3]/g;
+
+export function normalizeTerminalOutput(str: string): string {
+	if (!THAI_LAO_AM_REGEX.test(str)) return str;
+	return str.replace(THAI_LAO_AM_GLOBAL_REGEX, (char) => (char === "\u0e33" ? "\u0e4d\u0e32" : "\u0ecd\u0eb2"));
 }
 
 /**
@@ -208,8 +327,16 @@ class AnsiCodeTracker {
 	private strikethrough = false;
 	private fgColor: string | null = null; // Stores the full code like "31" or "38;5;240"
 	private bgColor: string | null = null; // Stores the full code like "41" or "48;5;240"
+	private activeHyperlink: string | null = null; // Active OSC 8 hyperlink URL, or null
 
 	process(ansiCode: string): void {
+		// OSC 8 hyperlink: \x1b]8;;<url>\x1b\\ (open) or \x1b]8;;\x1b\\ (close)
+		if (ansiCode.startsWith("\x1b]8;")) {
+			const m = ansiCode.match(/^\x1b\]8;[^;]*;([^\x1b\x07]*)/);
+			this.activeHyperlink = m?.[1] ? m[1] : null;
+			return;
+		}
+
 		if (!ansiCode.endsWith("m")) {
 			return;
 		}
@@ -344,11 +471,13 @@ class AnsiCodeTracker {
 		this.strikethrough = false;
 		this.fgColor = null;
 		this.bgColor = null;
+		// SGR reset does not affect OSC 8 hyperlink state
 	}
 
 	/** Clear all state for reuse. */
 	clear(): void {
 		this.reset();
+		this.activeHyperlink = null;
 	}
 
 	getActiveCodes(): string {
@@ -364,8 +493,11 @@ class AnsiCodeTracker {
 		if (this.fgColor) codes.push(this.fgColor);
 		if (this.bgColor) codes.push(this.bgColor);
 
-		if (codes.length === 0) return "";
-		return `\x1b[${codes.join(";")}m`;
+		let result = codes.length > 0 ? `\x1b[${codes.join(";")}m` : "";
+		if (this.activeHyperlink) {
+			result += `\x1b]8;;${this.activeHyperlink}\x1b\\`;
+		}
+		return result;
 	}
 
 	hasActiveCodes(): boolean {
@@ -379,22 +511,26 @@ class AnsiCodeTracker {
 			this.hidden ||
 			this.strikethrough ||
 			this.fgColor !== null ||
-			this.bgColor !== null
+			this.bgColor !== null ||
+			this.activeHyperlink !== null
 		);
 	}
 
 	/**
-	 * Get reset codes for attributes that need to be turned off at line end,
-	 * specifically underline which bleeds into padding.
-	 * Returns empty string if no problematic attributes are active.
+	 * Get reset codes for attributes that need to be turned off at line end.
+	 * Underline must be closed to prevent bleeding into padding.
+	 * Active OSC 8 hyperlinks must be closed and re-opened on the next line.
+	 * Returns empty string if no attributes need closing.
 	 */
 	getLineEndReset(): string {
-		// Only underline causes visual bleeding into padding
-		// Other attributes like colors don't visually bleed to padding
+		let result = "";
 		if (this.underline) {
-			return "\x1b[24m"; // Underline off only
+			result += "\x1b[24m"; // Underline off only
 		}
-		return "";
+		if (this.activeHyperlink) {
+			result += "\x1b]8;;\x1b\\"; // Close hyperlink; re-opened at line start via getActiveCodes()
+		}
+		return result;
 	}
 }
 
@@ -695,76 +831,136 @@ export function truncateToWidth(
 	ellipsis: string = "...",
 	pad: boolean = false,
 ): string {
-	const textVisibleWidth = visibleWidth(text);
+	if (maxWidth <= 0) {
+		return "";
+	}
 
-	if (textVisibleWidth <= maxWidth) {
-		return pad ? text + " ".repeat(maxWidth - textVisibleWidth) : text;
+	if (text.length === 0) {
+		return pad ? " ".repeat(maxWidth) : "";
 	}
 
 	const ellipsisWidth = visibleWidth(ellipsis);
-	const targetWidth = maxWidth - ellipsisWidth;
+	if (ellipsisWidth >= maxWidth) {
+		const textWidth = visibleWidth(text);
+		if (textWidth <= maxWidth) {
+			return pad ? text + " ".repeat(maxWidth - textWidth) : text;
+		}
 
-	if (targetWidth <= 0) {
-		return ellipsis.substring(0, maxWidth);
+		const clippedEllipsis = truncateFragmentToWidth(ellipsis, maxWidth);
+		if (clippedEllipsis.width === 0) {
+			return pad ? " ".repeat(maxWidth) : "";
+		}
+		return finalizeTruncatedResult("", 0, clippedEllipsis.text, clippedEllipsis.width, maxWidth, pad);
 	}
 
-	// Separate ANSI codes from visible content using grapheme segmentation
-	let i = 0;
-	const segments: Array<{ type: "ansi" | "grapheme"; value: string }> = [];
+	if (isPrintableAscii(text)) {
+		if (text.length <= maxWidth) {
+			return pad ? text + " ".repeat(maxWidth - text.length) : text;
+		}
+		const targetWidth = maxWidth - ellipsisWidth;
+		return finalizeTruncatedResult(text.slice(0, targetWidth), targetWidth, ellipsis, ellipsisWidth, maxWidth, pad);
+	}
 
-	while (i < text.length) {
-		const ansiResult = extractAnsiCode(text, i);
-		if (ansiResult) {
-			segments.push({ type: "ansi", value: ansiResult.code });
-			i += ansiResult.length;
-		} else {
-			// Find the next ANSI code or end of string
+	const targetWidth = maxWidth - ellipsisWidth;
+	let result = "";
+	let pendingAnsi = "";
+	let visibleSoFar = 0;
+	let keptWidth = 0;
+	let keepContiguousPrefix = true;
+	let overflowed = false;
+	let exhaustedInput = false;
+	const hasAnsi = text.includes("\x1b");
+	const hasTabs = text.includes("\t");
+
+	if (!hasAnsi && !hasTabs) {
+		for (const { segment } of segmenter.segment(text)) {
+			const width = graphemeWidth(segment);
+			if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+				result += segment;
+				keptWidth += width;
+			} else {
+				keepContiguousPrefix = false;
+			}
+			visibleSoFar += width;
+			if (visibleSoFar > maxWidth) {
+				overflowed = true;
+				break;
+			}
+		}
+		exhaustedInput = !overflowed;
+	} else {
+		let i = 0;
+		while (i < text.length) {
+			const ansi = extractAnsiCode(text, i);
+			if (ansi) {
+				pendingAnsi += ansi.code;
+				i += ansi.length;
+				continue;
+			}
+
+			if (text[i] === "\t") {
+				if (keepContiguousPrefix && keptWidth + 3 <= targetWidth) {
+					if (pendingAnsi) {
+						result += pendingAnsi;
+						pendingAnsi = "";
+					}
+					result += "\t";
+					keptWidth += 3;
+				} else {
+					keepContiguousPrefix = false;
+					pendingAnsi = "";
+				}
+				visibleSoFar += 3;
+				if (visibleSoFar > maxWidth) {
+					overflowed = true;
+					break;
+				}
+				i++;
+				continue;
+			}
+
 			let end = i;
-			while (end < text.length) {
+			while (end < text.length && text[end] !== "\t") {
 				const nextAnsi = extractAnsiCode(text, end);
-				if (nextAnsi) break;
+				if (nextAnsi) {
+					break;
+				}
 				end++;
 			}
-			// Segment this non-ANSI portion into graphemes
-			const textPortion = text.slice(i, end);
-			for (const seg of segmenter.segment(textPortion)) {
-				segments.push({ type: "grapheme", value: seg.segment });
+
+			for (const { segment } of segmenter.segment(text.slice(i, end))) {
+				const width = graphemeWidth(segment);
+				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+					if (pendingAnsi) {
+						result += pendingAnsi;
+						pendingAnsi = "";
+					}
+					result += segment;
+					keptWidth += width;
+				} else {
+					keepContiguousPrefix = false;
+					pendingAnsi = "";
+				}
+
+				visibleSoFar += width;
+				if (visibleSoFar > maxWidth) {
+					overflowed = true;
+					break;
+				}
+			}
+			if (overflowed) {
+				break;
 			}
 			i = end;
 		}
+		exhaustedInput = i >= text.length;
 	}
 
-	// Build truncated string from segments
-	let result = "";
-	let currentWidth = 0;
-
-	for (const seg of segments) {
-		if (seg.type === "ansi") {
-			result += seg.value;
-			continue;
-		}
-
-		const grapheme = seg.value;
-		// Skip empty graphemes to avoid issues with string-width calculation
-		if (!grapheme) continue;
-
-		const graphemeWidth = visibleWidth(grapheme);
-
-		if (currentWidth + graphemeWidth > targetWidth) {
-			break;
-		}
-
-		result += grapheme;
-		currentWidth += graphemeWidth;
+	if (!overflowed && exhaustedInput) {
+		return pad ? text + " ".repeat(Math.max(0, maxWidth - visibleSoFar)) : text;
 	}
 
-	// Add reset code before ellipsis to prevent styling leaking into it
-	const truncated = `${result}\x1b[0m${ellipsis}`;
-	if (pad) {
-		const truncatedWidth = visibleWidth(truncated);
-		return truncated + " ".repeat(Math.max(0, maxWidth - truncatedWidth));
-	}
-	return truncated;
+	return finalizeTruncatedResult(result, keptWidth, ellipsis, ellipsisWidth, maxWidth, pad);
 }
 
 /**

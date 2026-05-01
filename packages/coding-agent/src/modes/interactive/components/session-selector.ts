@@ -6,9 +6,8 @@ import {
 	type Component,
 	Container,
 	type Focusable,
-	getEditorKeybindings,
+	getKeybindings,
 	Input,
-	matchesKey,
 	Spacer,
 	Text,
 	truncateToWidth,
@@ -16,9 +15,10 @@ import {
 } from "@mariozechner/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.js";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.js";
+import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { appKey, appKeyHint, keyHint } from "./keybinding-hints.js";
+import { keyHint, keyText } from "./keybinding-hints.js";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.js";
 
 type SessionScope = "current" | "all";
@@ -48,11 +48,15 @@ function formatSessionDate(date: Date): string {
 	return `${Math.floor(diffDays / 365)}y`;
 }
 
+function canonicalizePath(path: string | undefined): string | undefined {
+	if (!path) return path;
+	return _canonicalizePath(path);
+}
+
 class SessionSelectorHeader implements Component {
 	private scope: SessionScope;
 	private sortMode: SortMode;
 	private nameFilter: NameFilter;
-	private keybindings: KeybindingsManager;
 	private requestRender: () => void;
 	private loading = false;
 	private loadProgress: { loaded: number; total: number } | null = null;
@@ -62,17 +66,10 @@ class SessionSelectorHeader implements Component {
 	private statusTimeout: ReturnType<typeof setTimeout> | null = null;
 	private showRenameHint = false;
 
-	constructor(
-		scope: SessionScope,
-		sortMode: SortMode,
-		nameFilter: NameFilter,
-		keybindings: KeybindingsManager,
-		requestRender: () => void,
-	) {
+	constructor(scope: SessionScope, sortMode: SortMode, nameFilter: NameFilter, requestRender: () => void) {
 		this.scope = scope;
 		this.sortMode = sortMode;
 		this.nameFilter = nameFilter;
-		this.keybindings = keybindings;
 		this.requestRender = requestRender;
 	}
 
@@ -159,7 +156,7 @@ class SessionSelectorHeader implements Component {
 		let hintLine1: string;
 		let hintLine2: string;
 		if (this.confirmingDeletePath !== null) {
-			const confirmHint = "Delete session? [Enter] confirm · [Esc/Ctrl+C] cancel";
+			const confirmHint = `Delete session? ${keyHint("tui.select.confirm", "confirm")} · ${keyHint("tui.select.cancel", "cancel")}`;
 			hintLine1 = theme.fg("error", truncateToWidth(confirmHint, width, "…"));
 			hintLine2 = "";
 		} else if (this.statusMessage) {
@@ -169,15 +166,16 @@ class SessionSelectorHeader implements Component {
 		} else {
 			const pathState = this.showPath ? "(on)" : "(off)";
 			const sep = theme.fg("muted", " · ");
-			const hint1 = keyHint("tab", "scope") + sep + theme.fg("muted", 're:<pattern> regex · "phrase" exact');
+			const hint1 =
+				keyHint("tui.input.tab", "scope") + sep + theme.fg("muted", 're:<pattern> regex · "phrase" exact');
 			const hint2Parts = [
-				keyHint("toggleSessionSort", "sort"),
-				appKeyHint(this.keybindings, "toggleSessionNamedFilter", "named"),
-				keyHint("deleteSession", "delete"),
-				keyHint("toggleSessionPath", `path ${pathState}`),
+				keyHint("app.session.toggleSort", "sort"),
+				keyHint("app.session.toggleNamedFilter", "named"),
+				keyHint("app.session.delete", "delete"),
+				keyHint("app.session.togglePath", `path ${pathState}`),
 			];
 			if (this.showRenameHint) {
-				hint2Parts.push(keyHint("renameSession", "rename"));
+				hint2Parts.push(keyHint("app.session.rename", "rename"));
 			}
 			const hint2 = hint2Parts.join(sep);
 			hintLine1 = truncateToWidth(hint1, width, "…");
@@ -211,14 +209,16 @@ function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
 	const byPath = new Map<string, SessionTreeNode>();
 
 	for (const session of sessions) {
-		byPath.set(session.path, { session, children: [] });
+		const sessionPath = canonicalizePath(session.path) ?? session.path;
+		byPath.set(sessionPath, { session, children: [] });
 	}
 
 	const roots: SessionTreeNode[] = [];
 
 	for (const session of sessions) {
-		const node = byPath.get(session.path)!;
-		const parentPath = session.parentSessionPath;
+		const sessionPath = canonicalizePath(session.path) ?? session.path;
+		const node = byPath.get(sessionPath)!;
+		const parentPath = canonicalizePath(session.parentSessionPath);
 
 		if (parentPath && byPath.has(parentPath)) {
 			byPath.get(parentPath)!.children.push(node);
@@ -281,7 +281,7 @@ class SessionList implements Component, Focusable {
 	private keybindings: KeybindingsManager;
 	private showPath = false;
 	private confirmingDeletePath: string | null = null;
-	private currentSessionFilePath?: string;
+	private currentSessionCanonicalPath?: string;
 	public onSelect?: (sessionPath: string) => void;
 	public onCancel?: () => void;
 	public onExit: () => void = () => {};
@@ -320,7 +320,7 @@ class SessionList implements Component, Focusable {
 		this.sortMode = sortMode;
 		this.nameFilter = nameFilter;
 		this.keybindings = keybindings;
-		this.currentSessionFilePath = currentSessionFilePath;
+		this.currentSessionCanonicalPath = canonicalizePath(currentSessionFilePath);
 		this.filterSessions("");
 
 		// Handle Enter in search input - select current item
@@ -382,12 +382,17 @@ class SessionList implements Component, Focusable {
 		if (!selected) return;
 
 		// Prevent deleting current session
-		if (this.currentSessionFilePath && selected.session.path === this.currentSessionFilePath) {
+		if (this.isCurrentSessionPath(selected.session.path)) {
 			this.onError?.("Cannot delete the currently active session");
 			return;
 		}
 
 		this.setConfirmingDeletePath(selected.session.path);
+	}
+
+	private isCurrentSessionPath(path: string): boolean {
+		if (!this.currentSessionCanonicalPath) return false;
+		return (canonicalizePath(path) ?? path) === this.currentSessionCanonicalPath;
 	}
 
 	invalidate(): void {}
@@ -402,7 +407,7 @@ class SessionList implements Component, Focusable {
 		if (this.filteredSessions.length === 0) {
 			let emptyMessage: string;
 			if (this.nameFilter === "named") {
-				const toggleKey = appKey(this.keybindings, "toggleSessionNamedFilter");
+				const toggleKey = keyText("app.session.toggleNamedFilter");
 				if (this.showCwd) {
 					emptyMessage = `  No named sessions found. Press ${toggleKey} to show all.`;
 				} else {
@@ -432,7 +437,7 @@ class SessionList implements Component, Focusable {
 			const session = node.session;
 			const isSelected = i === this.selectedIndex;
 			const isConfirmingDelete = session.path === this.confirmingDeletePath;
-			const isCurrent = this.currentSessionFilePath === session.path;
+			const isCurrent = this.isCurrentSessionPath(session.path);
 
 			// Build tree prefix
 			const prefix = this.buildTreePrefix(node);
@@ -511,18 +516,17 @@ class SessionList implements Component, Focusable {
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getEditorKeybindings();
+		const kb = getKeybindings();
 
 		// Handle delete confirmation state first - intercept all keys
 		if (this.confirmingDeletePath !== null) {
-			if (kb.matches(keyData, "selectConfirm")) {
+			if (kb.matches(keyData, "tui.select.confirm")) {
 				const pathToDelete = this.confirmingDeletePath;
 				this.setConfirmingDeletePath(null);
 				void this.onDeleteSession?.(pathToDelete);
 				return;
 			}
-			// Allow both Escape and Ctrl+C to cancel (consistent with pi UX)
-			if (kb.matches(keyData, "selectCancel") || matchesKey(keyData, "ctrl+c")) {
+			if (kb.matches(keyData, "tui.select.cancel")) {
 				this.setConfirmingDeletePath(null);
 				return;
 			}
@@ -530,38 +534,38 @@ class SessionList implements Component, Focusable {
 			return;
 		}
 
-		if (kb.matches(keyData, "tab")) {
+		if (kb.matches(keyData, "tui.input.tab")) {
 			if (this.onToggleScope) {
 				this.onToggleScope();
 			}
 			return;
 		}
 
-		if (kb.matches(keyData, "toggleSessionSort")) {
+		if (kb.matches(keyData, "app.session.toggleSort")) {
 			this.onToggleSort?.();
 			return;
 		}
 
-		if (this.keybindings.matches(keyData, "toggleSessionNamedFilter")) {
+		if (this.keybindings.matches(keyData, "app.session.toggleNamedFilter")) {
 			this.onToggleNameFilter?.();
 			return;
 		}
 
 		// Ctrl+P: toggle path display
-		if (kb.matches(keyData, "toggleSessionPath")) {
+		if (kb.matches(keyData, "app.session.togglePath")) {
 			this.showPath = !this.showPath;
 			this.onTogglePath?.(this.showPath);
 			return;
 		}
 
 		// Ctrl+D: initiate delete confirmation (useful on terminals that don't distinguish Ctrl+Backspace from Backspace)
-		if (kb.matches(keyData, "deleteSession")) {
+		if (kb.matches(keyData, "app.session.delete")) {
 			this.startDeleteConfirmationForSelectedSession();
 			return;
 		}
 
-		// Ctrl+R: rename selected session
-		if (matchesKey(keyData, "ctrl+r")) {
+		// Rename selected session
+		if (kb.matches(keyData, "app.session.rename")) {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected) {
 				this.onRenameSession?.(selected.session.path);
@@ -571,7 +575,7 @@ class SessionList implements Component, Focusable {
 
 		// Ctrl+Backspace: non-invasive convenience alias for delete
 		// Only triggers deletion when the query is empty; otherwise it is forwarded to the input
-		if (kb.matches(keyData, "deleteSessionNoninvasive")) {
+		if (kb.matches(keyData, "app.session.deleteNoninvasive")) {
 			if (this.searchInput.getValue().length > 0) {
 				this.searchInput.handleInput(keyData);
 				this.filterSessions(this.searchInput.getValue());
@@ -583,30 +587,30 @@ class SessionList implements Component, Focusable {
 		}
 
 		// Up arrow
-		if (kb.matches(keyData, "selectUp")) {
+		if (kb.matches(keyData, "tui.select.up")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 		}
 		// Down arrow
-		else if (kb.matches(keyData, "selectDown")) {
+		else if (kb.matches(keyData, "tui.select.down")) {
 			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1);
 		}
 		// Page up - jump up by maxVisible items
-		else if (kb.matches(keyData, "selectPageUp")) {
+		else if (kb.matches(keyData, "tui.select.pageUp")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisible);
 		}
 		// Page down - jump down by maxVisible items
-		else if (kb.matches(keyData, "selectPageDown")) {
+		else if (kb.matches(keyData, "tui.select.pageDown")) {
 			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible);
 		}
 		// Enter
-		else if (kb.matches(keyData, "selectConfirm")) {
+		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected && this.onSelect) {
 				this.onSelect(selected.session.path);
 			}
 		}
 		// Escape - cancel
-		else if (kb.matches(keyData, "selectCancel")) {
+		else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.onCancel) {
 				this.onCancel();
 			}
@@ -667,8 +671,8 @@ async function deleteSessionFile(
 export class SessionSelectorComponent extends Container implements Focusable {
 	handleInput(data: string): void {
 		if (this.mode === "rename") {
-			const kb = getEditorKeybindings();
-			if (kb.matches(data, "selectCancel") || matchesKey(data, "ctrl+c")) {
+			const kb = getKeybindings();
+			if (kb.matches(data, "tui.select.cancel")) {
 				this.exitRenameMode();
 				return;
 			}
@@ -749,13 +753,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		this.allSessionsLoader = allSessionsLoader;
 		this.onCancel = onCancel;
 		this.requestRender = requestRender;
-		this.header = new SessionSelectorHeader(
-			this.scope,
-			this.sortMode,
-			this.nameFilter,
-			this.keybindings,
-			this.requestRender,
-		);
+		this.header = new SessionSelectorHeader(this.scope, this.sortMode, this.nameFilter, this.requestRender);
 		const renameSession = options?.renameSession;
 		this.renameSession = renameSession;
 		this.canRename = !!renameSession;
@@ -864,7 +862,13 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		panel.addChild(new Spacer(1));
 		panel.addChild(this.renameInput);
 		panel.addChild(new Spacer(1));
-		panel.addChild(new Text(theme.fg("muted", "Enter to save · Esc/Ctrl+C to cancel"), 1, 0));
+		panel.addChild(
+			new Text(
+				theme.fg("muted", `${keyText("tui.select.confirm")} to save · ${keyText("tui.select.cancel")} to cancel`),
+				1,
+				0,
+			),
+		);
 
 		this.buildBaseLayout(panel, { showHeader: false });
 		this.requestRender();

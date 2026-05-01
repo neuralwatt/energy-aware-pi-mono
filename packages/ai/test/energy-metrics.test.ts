@@ -19,22 +19,29 @@ const NW_GPT_OSS: Model<"openai-completions"> = {
 vi.mock("openai", () => {
 	let usagePayload: Record<string, unknown> = {};
 
+	function makeStream() {
+		const data = {
+			async *[Symbol.asyncIterator]() {
+				yield {
+					choices: [{ delta: { content: "Hello" }, finish_reason: null }],
+				};
+				yield {
+					choices: [{ delta: {}, finish_reason: "stop" }],
+					usage: usagePayload,
+				};
+			},
+		};
+		const response = { status: 200, headers: new Map<string, string>() };
+		return {
+			withResponse: async () => ({ data, response }),
+			[Symbol.asyncIterator]: data[Symbol.asyncIterator].bind(data),
+		};
+	}
+
 	class FakeOpenAI {
 		chat = {
 			completions: {
-				create: async () => {
-					return {
-						async *[Symbol.asyncIterator]() {
-							yield {
-								choices: [{ delta: { content: "Hello" }, finish_reason: null }],
-							};
-							yield {
-								choices: [{ delta: {}, finish_reason: "stop" }],
-								usage: usagePayload,
-							};
-						},
-					};
-				},
+				create: () => makeStream(),
 			},
 		};
 

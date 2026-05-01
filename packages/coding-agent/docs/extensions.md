@@ -37,8 +37,10 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
   - [Extension Styles](#extension-styles)
 - [Events](#events)
   - [Lifecycle Overview](#lifecycle-overview)
+  - [Resource Events](#resource-events)
   - [Session Events](#session-events)
   - [Agent Events](#agent-events)
+  - [Model Events](#model-events)
   - [Tool Events](#tool-events)
 - [ExtensionContext](#extensioncontext)
 - [ExtensionCommandContext](#extensioncommandcontext)
@@ -56,7 +58,7 @@ Create `~/.pi/agent/extensions/my-extension.ts`:
 
 ```typescript
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
   // React to events
@@ -138,17 +140,19 @@ To share extensions via npm or git as pi packages, see [packages.md](packages.md
 | Package | Purpose |
 |---------|---------|
 | `@mariozechner/pi-coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
-| `@sinclair/typebox` | Schema definitions for tool parameters |
+| `typebox` | Schema definitions for tool parameters |
 | `@mariozechner/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
 | `@mariozechner/pi-tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
+For distributed pi packages installed with `pi install` (npm or git), runtime deps must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
+
 Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 
 ## Writing an Extension
 
-An extension exports a default function that receives `ExtensionAPI`:
+An extension exports a default factory function that receives `ExtensionAPI`. The factory can be synchronous or asynchronous:
 
 ```typescript
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -172,6 +176,45 @@ export default function (pi: ExtensionAPI) {
 ```
 
 Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript works without compilation.
+
+If the factory returns a `Promise`, pi awaits it before continuing startup. That means async initialization completes before `session_start`, before `resources_discover`, and before provider registrations queued via `pi.registerProvider()` are flushed.
+
+### Async factory functions
+
+Use an async factory for one-time startup work such as fetching remote configuration or dynamically discovering available models.
+
+```typescript
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export default async function (pi: ExtensionAPI) {
+  const response = await fetch("http://localhost:1234/v1/models");
+  const payload = (await response.json()) as {
+    data: Array<{
+      id: string;
+      name?: string;
+      context_window?: number;
+      max_tokens?: number;
+    }>;
+  };
+
+  pi.registerProvider("local-openai", {
+    baseUrl: "http://localhost:1234/v1",
+    apiKey: "LOCAL_OPENAI_API_KEY",
+    api: "openai-completions",
+    models: payload.data.map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.context_window ?? 128000,
+      maxTokens: model.max_tokens ?? 4096,
+    })),
+  });
+}
+```
+
+This pattern makes the fetched models available during normal startup and to `pi --list-models`.
 
 ### Extension Styles
 
@@ -225,10 +268,10 @@ Run `npm install` in the extension directory, then imports from `node_modules/` 
 ### Lifecycle Overview
 
 ```
-pi starts (CLI only)
+pi starts
   │
-  ├─► session_directory (CLI startup only, no ctx)
-  └─► session_start
+  ├─► session_start { reason: "startup" }
+  └─► resources_discover { reason: "startup" }
       │
       ▼
 user sends prompt ─────────────────────────────────────────┐
@@ -245,13 +288,14 @@ user sends prompt ────────────────────�
   │   ├─► turn_start                               │       │
   │   ├─► context (can modify messages)            │       │
   │   ├─► before_provider_request (can inspect or replace payload)
+  │   ├─► after_provider_response (status + headers, before stream consume)
   │   │                                            │       │
   │   │   LLM responds, may call tools:            │       │
-  │   │     ├─► tool_call (can block)              │       │
   │   │     ├─► tool_execution_start               │       │
+  │   │     ├─► tool_call (can block)              │       │
   │   │     ├─► tool_execution_update              │       │
-  │   │     ├─► tool_execution_end                 │       │
-  │   │     └─► tool_result (can modify)           │       │
+  │   │     ├─► tool_result (can modify)           │       │
+  │   │     └─► tool_execution_end                 │       │
   │   │                                            │       │
   │   └─► turn_end                                 │       │
   │                                                        │
@@ -261,11 +305,15 @@ user sends another prompt ◄─────────────────
 
 /new (new session) or /resume (switch session)
   ├─► session_before_switch (can cancel)
-  └─► session_switch
+  ├─► session_shutdown
+  ├─► session_start { reason: "new" | "resume", previousSessionFile? }
+  └─► resources_discover { reason: "startup" }
 
-/fork
+/fork or /clone
   ├─► session_before_fork (can cancel)
-  └─► session_fork
+  ├─► session_shutdown
+  ├─► session_start { reason: "fork", previousSessionFile }
+  └─► resources_discover { reason: "startup" }
 
 /compact or auto-compaction
   ├─► session_before_compact (can cancel or customize)
@@ -276,49 +324,54 @@ user sends another prompt ◄─────────────────
   └─► session_tree
 
 /model or Ctrl+P (model selection/cycling)
+  ├─► thinking_level_select (if model change changes/clamps thinking level)
   └─► model_select
 
-exit (Ctrl+C, Ctrl+D)
+thinking level changes (settings, keybinding, pi.setThinkingLevel())
+  └─► thinking_level_select
+
+exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM)
   └─► session_shutdown
 ```
 
-### Session Events
+### Resource Events
 
-See [session.md](session.md) for session storage internals and the SessionManager API.
+#### resources_discover
 
-#### session_directory
-
-Fired by the `pi` CLI during startup session resolution, before the initial session manager is created.
-
-This event is:
-- CLI-only. It is not emitted in SDK mode.
-- Startup-only. It is not emitted for later interactive `/new` or `/resume` actions.
-- Bypassed when `--session-dir` is provided.
-- Special-cased to receive no `ctx` argument.
-
-If multiple extensions return `sessionDir`, the last one wins.
+Fired after `session_start` so extensions can contribute additional skill, prompt, and theme paths.
+The startup path uses `reason: "startup"`. Reload uses `reason: "reload"`.
 
 ```typescript
-pi.on("session_directory", async (event) => {
+pi.on("resources_discover", async (event, _ctx) => {
+  // event.cwd - current working directory
+  // event.reason - "startup" | "reload"
   return {
-    sessionDir: `/tmp/pi-sessions/${encodeURIComponent(event.cwd)}`,
+    skillPaths: ["/path/to/skills"],
+    promptPaths: ["/path/to/prompts"],
+    themePaths: ["/path/to/themes"],
   };
 });
 ```
 
+### Session Events
+
+See [Session Format](session-format.md) for session storage internals and the SessionManager API.
+
 #### session_start
 
-Fired on initial session load.
+Fired when a session is started, loaded, or reloaded.
 
 ```typescript
-pi.on("session_start", async (_event, ctx) => {
+pi.on("session_start", async (event, ctx) => {
+  // event.reason - "startup" | "reload" | "new" | "resume" | "fork"
+  // event.previousSessionFile - present for "new", "resume", and "fork"
   ctx.ui.notify(`Session: ${ctx.sessionManager.getSessionFile() ?? "ephemeral"}`, "info");
 });
 ```
 
-#### session_before_switch / session_switch
+#### session_before_switch
 
-Fired when starting a new session (`/new`) or switching sessions (`/resume`).
+Fired before starting a new session (`/new`) or switching sessions (`/resume`).
 
 ```typescript
 pi.on("session_before_switch", async (event, ctx) => {
@@ -330,29 +383,27 @@ pi.on("session_before_switch", async (event, ctx) => {
     if (!ok) return { cancel: true };
   }
 });
-
-pi.on("session_switch", async (event, ctx) => {
-  // event.reason - "new" or "resume"
-  // event.previousSessionFile - session we came from
-});
 ```
 
-#### session_before_fork / session_fork
+After a successful switch or new-session action, pi emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "new" | "resume"` and `previousSessionFile`.
+Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
 
-Fired when forking via `/fork`.
+#### session_before_fork
+
+Fired when forking via `/fork` or cloning via `/clone`.
 
 ```typescript
 pi.on("session_before_fork", async (event, ctx) => {
-  // event.entryId - ID of the entry being forked from
-  return { cancel: true }; // Cancel fork
+  // event.entryId - ID of the selected entry
+  // event.position - "before" for /fork, "at" for /clone
+  return { cancel: true }; // Cancel fork/clone
   // OR
-  return { skipConversationRestore: true }; // Fork but don't rewind messages
-});
-
-pi.on("session_fork", async (event, ctx) => {
-  // event.previousSessionFile - previous session file
+  return { skipConversationRestore: true }; // Reserved for future conversation restore control
 });
 ```
+
+After a successful fork or clone, pi emits `session_shutdown` for the old extension instance, reloads and rebinds extensions for the new session, then emits `session_start` with `reason: "fork"` and `previousSessionFile`.
+Do cleanup work in `session_shutdown`, then reestablish any in-memory state in `session_start`.
 
 #### session_before_compact / session_compact
 
@@ -383,7 +434,7 @@ pi.on("session_compact", async (event, ctx) => {
 
 #### session_before_tree / session_tree
 
-Fired on `/tree` navigation. See [tree.md](tree.md) for tree navigation concepts.
+Fired on `/tree` navigation. See [Sessions](sessions.md) for tree navigation concepts.
 
 ```typescript
 pi.on("session_before_tree", async (event, ctx) => {
@@ -400,10 +451,12 @@ pi.on("session_tree", async (event, ctx) => {
 
 #### session_shutdown
 
-Fired on exit (Ctrl+C, Ctrl+D, SIGTERM).
+Fired before an extension runtime is torn down.
 
 ```typescript
-pi.on("session_shutdown", async (_event, ctx) => {
+pi.on("session_shutdown", async (event, ctx) => {
+  // event.reason - "quit" | "reload" | "new" | "resume" | "fork"
+  // event.targetSessionFile - destination session for session replacement flows
   // Cleanup, save state, etc.
 });
 ```
@@ -418,7 +471,17 @@ Fired after user submits prompt, before agent loop. Can inject a message and/or 
 pi.on("before_agent_start", async (event, ctx) => {
   // event.prompt - user's prompt text
   // event.images - attached images (if any)
-  // event.systemPrompt - current system prompt
+  // event.systemPrompt - current chained system prompt for this handler
+  //   (includes changes from earlier before_agent_start handlers)
+  // event.systemPromptOptions - structured options used to build the system prompt
+  //   .customPrompt - any custom system prompt (from --system-prompt, SYSTEM.md, or custom templates)
+  //   .selectedTools - tools currently active in the prompt
+  //   .toolSnippets - one-line descriptions for each tool
+  //   .promptGuidelines - custom guideline bullets
+  //   .appendSystemPrompt - text from --append-system-prompt flags
+  //   .cwd - working directory
+  //   .contextFiles - AGENTS.md files and other loaded context files
+  //   .skills - loaded skills
 
   return {
     // Inject a persistent message (stored in session, sent to LLM)
@@ -432,6 +495,10 @@ pi.on("before_agent_start", async (event, ctx) => {
   };
 });
 ```
+
+The `systemPromptOptions` field gives extensions access to the same structured data Pi uses to build the system prompt. This lets you inspect what Pi has loaded — custom prompts, guidelines, tool snippets, context files, skills — without re-discovering resources or re-parsing flags. Use it when your extension needs to make deep, informed changes to the system prompt while respecting user-provided configuration.
+
+Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` both reflect the chained system prompt as of the current handler. Later `before_agent_start` handlers can still modify it again.
 
 #### agent_start / agent_end
 
@@ -465,6 +532,7 @@ Fired for message lifecycle updates.
 
 - `message_start` and `message_end` fire for user, assistant, and toolResult messages.
 - `message_update` fires for assistant streaming updates.
+- `message_end` handlers can return `{ message }` to replace the finalized message. The replacement must keep the same `role`.
 
 ```typescript
 pi.on("message_start", async (event, ctx) => {
@@ -477,13 +545,32 @@ pi.on("message_update", async (event, ctx) => {
 });
 
 pi.on("message_end", async (event, ctx) => {
-  // event.message
+  if (event.message.role !== "assistant") return;
+
+  return {
+    message: {
+      ...event.message,
+      usage: {
+        ...event.message.usage,
+        cost: {
+          ...event.message.usage.cost,
+          total: 0.123,
+        },
+      },
+    },
+  };
 });
 ```
 
 #### tool_execution_start / tool_execution_update / tool_execution_end
 
 Fired for tool execution lifecycle updates.
+
+In parallel tool mode:
+- `tool_execution_start` is emitted in assistant source order during the preflight phase
+- `tool_execution_update` events may interleave across tools
+- `tool_execution_end` is emitted in tool completion order after each tool is finalized
+- final `toolResult` message events are still emitted later in assistant source order
 
 ```typescript
 pi.on("tool_execution_start", async (event, ctx) => {
@@ -501,7 +588,7 @@ pi.on("tool_execution_end", async (event, ctx) => {
 
 #### context
 
-Fired before each LLM call. Modify messages non-destructively. See [session.md](session.md) for message types.
+Fired before each LLM call. Modify messages non-destructively. See [Session Format](session-format.md) for message types.
 
 ```typescript
 pi.on("context", async (event, ctx) => {
@@ -515,6 +602,8 @@ pi.on("context", async (event, ctx) => {
 
 Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
 
+This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Pi's system prompt string rather than the final serialized provider payload.
+
 ```typescript
 pi.on("before_provider_request", (event, ctx) => {
   console.log(JSON.stringify(event.payload, null, 2));
@@ -525,6 +614,22 @@ pi.on("before_provider_request", (event, ctx) => {
 ```
 
 This is mainly useful for debugging provider serialization and cache behavior.
+
+#### after_provider_response
+
+Fired after an HTTP response is received and before its stream body is consumed. Handlers run in extension load order.
+
+```typescript
+pi.on("after_provider_response", (event, ctx) => {
+  // event.status - HTTP status code
+  // event.headers - normalized response headers
+  if (event.status === 429) {
+    console.log("rate limited", event.headers["retry-after"]);
+  }
+});
+```
+
+Header availability depends on provider and transport. Providers that abstract HTTP responses may not expose headers.
 
 ### Model Events
 
@@ -549,11 +654,38 @@ pi.on("model_select", async (event, ctx) => {
 
 Use this to update UI elements (status bars, footers) or perform model-specific initialization when the active model changes.
 
+#### thinking_level_select
+
+Fired when the thinking level changes. This is notification-only; handler return values are ignored.
+
+```typescript
+pi.on("thinking_level_select", async (event, ctx) => {
+  // event.level - newly selected thinking level
+  // event.previousLevel - previous thinking level
+
+  ctx.ui.setStatus("thinking", `thinking: ${event.level}`);
+});
+```
+
+Use this to update extension UI when `pi.setThinkingLevel()`, model changes, or built-in thinking-level controls change the active thinking level.
+
 ### Tool Events
 
 #### tool_call
 
-Fired before tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
+Fired after `tool_execution_start`, before the tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
+
+Before `tool_call` runs, pi waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
+
+In the default parallel tool execution mode, sibling tool calls from the same assistant message are preflighted sequentially, then executed concurrently. `tool_call` is not guaranteed to see sibling tool results from that same assistant message in `ctx.sessionManager`.
+
+`event.input` is mutable. Mutate it in place to patch tool arguments before execution.
+
+Behavior guarantees:
+- Mutations to `event.input` affect the actual tool execution
+- Later `tool_call` handlers see mutations made by earlier handlers
+- No re-validation is performed after your mutation
+- Return values from `tool_call` only control blocking via `{ block: true, reason?: string }`
 
 ```typescript
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
@@ -561,11 +693,13 @@ import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 pi.on("tool_call", async (event, ctx) => {
   // event.toolName - "bash", "read", "write", "edit", etc.
   // event.toolCallId
-  // event.input - tool parameters
+  // event.input - tool parameters (mutable)
 
   // Built-in tools: no type params needed
   if (isToolCallEventType("bash", event)) {
     // event.input is { command: string; timeout?: number }
+    event.input.command = `source ~/.profile\n${event.input.command}`;
+
     if (event.input.command.includes("rm -rf")) {
       return { block: true, reason: "Dangerous command" };
     }
@@ -602,12 +736,16 @@ pi.on("tool_call", (event) => {
 
 #### tool_result
 
-Fired after tool executes. **Can modify result.**
+Fired after tool execution finishes and before `tool_execution_end` plus the final tool result message events are emitted. **Can modify result.**
+
+In parallel tool mode, `tool_result` and `tool_execution_end` may interleave in tool completion order, while final `toolResult` message events are still emitted later in assistant source order.
 
 `tool_result` handlers chain like middleware:
 - Handlers run in extension load order
 - Each handler sees the latest result after previous handler changes
 - Handlers can return partial patches (`content`, `details`, or `isError`); omitted fields keep their current values
+
+Use `ctx.signal` for nested async work inside the handler. This lets Esc cancel model calls, `fetch()`, and other abort-aware operations started by the extension.
 
 ```typescript
 import { isBashToolResult } from "@mariozechner/pi-coding-agent";
@@ -619,6 +757,12 @@ pi.on("tool_result", async (event, ctx) => {
   if (isBashToolResult(event)) {
     // event.details is typed as BashToolDetails
   }
+
+  const response = await fetch("https://example.com/summarize", {
+    method: "POST",
+    body: JSON.stringify({ content: event.content }),
+    signal: ctx.signal,
+  });
 
   // Modify result:
   return { content: [...], details: {...}, isError: false };
@@ -632,6 +776,8 @@ pi.on("tool_result", async (event, ctx) => {
 Fired when user executes `!` or `!!` commands. **Can intercept.**
 
 ```typescript
+import { createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+
 pi.on("user_bash", (event, ctx) => {
   // event.command - the bash command
   // event.excludeFromContext - true if !! prefix
@@ -640,7 +786,17 @@ pi.on("user_bash", (event, ctx) => {
   // Option 1: Provide custom operations (e.g., SSH)
   return { operations: remoteBashOps };
 
-  // Option 2: Full replacement - return result directly
+  // Option 2: Wrap pi's built-in local bash backend
+  const local = createLocalBashOperations();
+  return {
+    operations: {
+      exec(command, cwd, options) {
+        return local.exec(`source ~/.profile\n${command}`, cwd, options);
+      }
+    }
+  };
+
+  // Option 3: Full replacement - return result directly
   return { result: { output: "...", exitCode: 0, cancelled: false, truncated: false } };
 });
 ```
@@ -695,9 +851,7 @@ Transforms chain across handlers. See [input-transform.ts](../examples/extension
 
 ## ExtensionContext
 
-All handlers except `session_directory` receive `ctx: ExtensionContext`.
-
-`session_directory` is a CLI startup hook and receives only the event.
+All handlers receive `ctx: ExtensionContext`.
 
 ### ctx.ui
 
@@ -713,7 +867,9 @@ Current working directory.
 
 ### ctx.sessionManager
 
-Read-only access to session state. See [session.md](session.md) for the full SessionManager API and entry types.
+Read-only access to session state. See [Session Format](session-format.md) for the full SessionManager API and entry types.
+
+For `tool_call`, this state is synchronized through the current assistant message before handlers run. In parallel tool execution mode it is still not guaranteed to include sibling tool results from the same assistant message.
 
 ```typescript
 ctx.sessionManager.getEntries()       // All entries
@@ -724,6 +880,31 @@ ctx.sessionManager.getLeafId()        // Current leaf entry ID
 ### ctx.modelRegistry / ctx.model
 
 Access to models and API keys.
+
+### ctx.signal
+
+The current agent abort signal, or `undefined` when no agent turn is active.
+
+Use this for abort-aware nested work started by extension handlers, for example:
+- `fetch(..., { signal: ctx.signal })`
+- model calls that accept `signal`
+- file or process helpers that accept `AbortSignal`
+
+`ctx.signal` is typically defined during active turn events such as `tool_call`, `tool_result`, `message_update`, and `turn_end`.
+It is usually `undefined` in idle or non-turn contexts such as session events, extension commands, and shortcuts fired while pi is idle.
+
+```typescript
+pi.on("tool_result", async (event, ctx) => {
+  const response = await fetch("https://example.com/api", {
+    method: "POST",
+    body: JSON.stringify(event),
+    signal: ctx.signal,
+  });
+
+  const data = await response.json();
+  return { details: data };
+});
+```
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
@@ -776,7 +957,12 @@ ctx.compact({
 
 ### ctx.getSystemPrompt()
 
-Returns the current effective system prompt. This includes any modifications made by `before_agent_start` handlers for the current turn.
+Returns Pi's current system prompt string.
+
+- During `before_agent_start`, this reflects chained system-prompt changes made so far for the current turn.
+- It does not include later `context` message mutations.
+- It does not include `before_provider_request` payload rewrites.
+- If later-loaded extensions run after yours, they can still change what is ultimately sent.
 
 ```typescript
 pi.on("before_agent_start", (event, ctx) => {
@@ -807,14 +993,21 @@ pi.registerCommand("my-cmd", {
 Create a new session:
 
 ```typescript
+const parentSession = ctx.sessionManager.getSessionFile();
+const kickoff = "Continue in the replacement session";
+
 const result = await ctx.newSession({
-  parentSession: ctx.sessionManager.getSessionFile(),
+  parentSession,
   setup: async (sm) => {
     sm.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Context from previous session..." }],
       timestamp: Date.now(),
     });
+  },
+  withSession: async (ctx) => {
+    // Use only the replacement-session ctx here.
+    await ctx.sendUserMessage(kickoff);
   },
 });
 
@@ -823,16 +1016,36 @@ if (result.cancelled) {
 }
 ```
 
-### ctx.fork(entryId)
+Options:
+- `parentSession`: parent session file to record in the new session header
+- `setup`: mutate the new session's `SessionManager` before `withSession` runs
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
+
+### ctx.fork(entryId, options?)
 
 Fork from a specific entry, creating a new session file:
 
 ```typescript
-const result = await ctx.fork("entry-id-123");
-if (!result.cancelled) {
-  // Now in the forked session
+const result = await ctx.fork("entry-id-123", {
+  withSession: async (ctx) => {
+    // Use only the replacement-session ctx here.
+    ctx.ui.notify("Now in the forked session", "info");
+  },
+});
+if (result.cancelled) {
+  // An extension cancelled the fork
+}
+
+const cloneResult = await ctx.fork("entry-id-456", { position: "at" });
+if (cloneResult.cancelled) {
+  // An extension cancelled the clone
 }
 ```
+
+Options:
+- `position`: `"before"` (default) forks before the selected user message, restoring that prompt into the editor
+- `position`: `"at"` duplicates the active path through the selected entry without restoring editor text
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 ### ctx.navigateTree(targetId, options?)
 
@@ -853,6 +1066,92 @@ Options:
 - `replaceInstructions`: If true, `customInstructions` replaces the default prompt instead of being appended
 - `label`: Label to attach to the branch summary entry (or target entry if not summarizing)
 
+### ctx.switchSession(sessionPath, options?)
+
+Switch to a different session file:
+
+```typescript
+const result = await ctx.switchSession("/path/to/session.jsonl", {
+  withSession: async (ctx) => {
+    await ctx.sendUserMessage("Resume work in the replacement session");
+  },
+});
+if (result.cancelled) {
+  // An extension cancelled the switch via session_before_switch
+}
+```
+
+Options:
+- `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
+
+To discover available sessions, use the static `SessionManager.list()` or `SessionManager.listAll()` methods:
+
+```typescript
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+
+pi.registerCommand("switch", {
+  description: "Switch to another session",
+  handler: async (args, ctx) => {
+    const sessions = await SessionManager.list(ctx.cwd);
+    if (sessions.length === 0) return;
+    const choice = await ctx.ui.select(
+      "Pick session:",
+      sessions.map(s => s.file),
+    );
+    if (choice) {
+      await ctx.switchSession(choice, {
+        withSession: async (ctx) => {
+          ctx.ui.notify("Switched session", "info");
+        },
+      });
+    }
+  },
+});
+```
+
+### Session replacement lifecycle and footguns
+
+`withSession` receives a fresh `ReplacedSessionContext`, which extends `ExtensionCommandContext` with async `sendMessage()` and `sendUserMessage()` helpers bound to the replacement session.
+
+Lifecycle and footguns:
+- `withSession` runs only after the old session has emitted `session_shutdown`, the old runtime has been torn down, the replacement session has been rebound, and the new extension instance has already received `session_start`.
+- The callback still executes in the original closure, not inside the new extension instance. That means your old extension instance may already have run its shutdown cleanup before `withSession` starts.
+- Captured old `pi` / old command `ctx` session-bound objects are stale after replacement and will throw if used. Use only the `ctx` passed to `withSession` for session-bound work.
+- Previously extracted raw objects are still your responsibility. For example, if you capture `const sm = ctx.sessionManager` before replacement, `sm` is still the old `SessionManager` object. Do not reuse it after replacement.
+- Code in `withSession` should assume any state invalidated by your `session_shutdown` handler is already gone. Only capture plain data that survives shutdown cleanly, such as strings, ids, and serialized config.
+
+Safe pattern:
+
+```typescript
+pi.registerCommand("handoff", {
+  handler: async (_args, ctx) => {
+    const kickoff = "Continue from the replacement session";
+    await ctx.newSession({
+      withSession: async (ctx) => {
+        await ctx.sendUserMessage(kickoff);
+      },
+    });
+  },
+});
+```
+
+Unsafe pattern:
+
+```typescript
+pi.registerCommand("handoff", {
+  handler: async (_args, ctx) => {
+    const oldSessionManager = ctx.sessionManager;
+    await ctx.newSession({
+      withSession: async (_ctx) => {
+        // stale old objects: do not do this
+        oldSessionManager.getSessionFile();
+        pi.sendUserMessage("wrong");
+      },
+    });
+  },
+});
+```
+
 ### ctx.reload()
 
 Run the same reload flow as `/reload`.
@@ -869,7 +1168,7 @@ pi.registerCommand("reload-runtime", {
 
 Important behavior:
 - `await ctx.reload()` emits `session_shutdown` for the current extension runtime
-- It then reloads resources and emits `session_start` (and `resources_discover` with reason `"reload"`) for the new runtime
+- It then reloads resources and emits `session_start` with `reason: "reload"` and `resources_discover` with reason `"reload"`
 - The currently running command handler still continues in the old call frame
 - Code after `await ctx.reload()` still runs from the pre-reload version
 - Code after `await ctx.reload()` must not assume old in-memory extension state is still valid
@@ -883,7 +1182,7 @@ Example tool the LLM can call to trigger reload:
 
 ```typescript
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("reload-runtime", {
@@ -923,12 +1222,14 @@ Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) fo
 
 Use `pi.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
 
-Use `promptSnippet` to customize that tool's one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
+Use `promptSnippet` to opt a custom tool into a one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
+
+**Important:** `promptGuidelines` bullets are appended flat to the `Guidelines` section with no tool name prefix. Each guideline must name the tool it refers to — avoid "Use this tool when..." because the LLM cannot tell which tool "this" means. Write "Use my_tool when..." instead.
 
 See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full example.
 
 ```typescript
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 
 pi.registerTool({
@@ -936,11 +1237,17 @@ pi.registerTool({
   label: "My Tool",
   description: "What this tool does",
   promptSnippet: "Summarize or transform text according to action",
-  promptGuidelines: ["Use this tool when the user asks to summarize previously generated text."],
+  promptGuidelines: ["Use my_tool when the user asks to summarize previously generated text."],
   parameters: Type.Object({
     action: StringEnum(["list", "add"] as const),
     text: Type.Optional(Type.String()),
   }),
+  prepareArguments(args) {
+    // Optional compatibility shim. Runs before schema validation.
+    // Return the current schema shape, for example to fold legacy fields
+    // into the modern parameter object.
+    return args;
+  },
 
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     // Stream progress
@@ -953,8 +1260,8 @@ pi.registerTool({
   },
 
   // Optional: Custom rendering
-  renderCall(args, theme) { ... },
-  renderResult(result, options, theme) { ... },
+  renderCall(args, theme, context) { ... },
+  renderResult(result, options, theme, context) { ... },
 });
 ```
 
@@ -976,7 +1283,7 @@ pi.sendMessage({
 
 **Options:**
 - `deliverAs` - Delivery mode:
-  - `"steer"` (default) - Interrupts streaming. Delivered after current tool finishes, remaining tools skipped.
+  - `"steer"` (default) - Queues the message while streaming. Delivered after the current assistant turn finishes executing its tool calls, before the next LLM call.
   - `"followUp"` - Waits for agent to finish. Delivered only when agent has no more tool calls.
   - `"nextTurn"` - Queued for next user prompt. Does not interrupt or trigger anything.
 - `triggerTurn: true` - If agent is idle, trigger an LLM response immediately. Only applies to `"steer"` and `"followUp"` modes (ignored for `"nextTurn"`).
@@ -1002,7 +1309,7 @@ pi.sendUserMessage("And then summarize", { deliverAs: "followUp" });
 
 **Options:**
 - `deliverAs` - Required when agent is streaming:
-  - `"steer"` - Interrupts after current tool, remaining tools skipped
+  - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
 
 When not streaming, the message is sent immediately and triggers a new turn. When streaming without `deliverAs`, throws an error.
@@ -1066,6 +1373,8 @@ Labels persist in the session and survive restarts. Use them to mark important p
 
 Register a command.
 
+If multiple extensions register the same command name, pi keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
+
 ```typescript
 pi.registerCommand("stats", {
   description: "Show session statistics",
@@ -1103,19 +1412,27 @@ The list matches the RPC `get_commands` ordering: extensions first, then templat
 ```typescript
 const commands = pi.getCommands();
 const bySource = commands.filter((command) => command.source === "extension");
+const userScoped = commands.filter((command) => command.sourceInfo.scope === "user");
 ```
 
 Each entry has this shape:
 
 ```typescript
 {
-  name: string; // Command name without the leading slash
+  name: string; // Invokable command name without the leading slash. May be suffixed like "review:1"
   description?: string;
   source: "extension" | "prompt" | "skill";
-  location?: "user" | "project" | "path"; // For templates and skills
-  path?: string; // Files backing templates, skills, and extensions
+  sourceInfo: {
+    path: string;
+    source: string;
+    scope: "user" | "project" | "temporary";
+    origin: "package" | "top-level";
+    baseDir?: string;
+  };
 }
 ```
+
+Use `sourceInfo` as the canonical provenance field. Do not infer ownership from command names or from ad hoc path parsing.
 
 Built-in interactive commands (like `/model` and `/settings`) are not included here. They are handled only in interactive
 mode and would not execute if sent via `prompt`.
@@ -1149,7 +1466,7 @@ pi.registerFlag("plan", {
 });
 
 // Check value
-if (pi.getFlag("--plan")) {
+if (pi.getFlag("plan")) {
   // Plan mode enabled
 }
 ```
@@ -1168,11 +1485,26 @@ const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
 Manage active tools. This works for both built-in tools and dynamically registered tools.
 
 ```typescript
-const active = pi.getActiveTools();  // ["read", "bash", "edit", "write"]
-const all = pi.getAllTools();        // [{ name: "read", description: "Read file contents..." }, ...]
-const names = all.map(t => t.name);  // Just names if needed
+const active = pi.getActiveTools();
+const all = pi.getAllTools();
+// [{
+//   name: "read",
+//   description: "Read file contents...",
+//   parameters: ..., 
+//   sourceInfo: { path: "<builtin:read>", source: "builtin", scope: "temporary", origin: "top-level" }
+// }, ...]
+const names = all.map(t => t.name);
+const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
+const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
 pi.setActiveTools(["read", "bash"]); // Switch to read-only
 ```
+
+`pi.getAllTools()` returns `name`, `description`, `parameters`, and `sourceInfo`.
+
+Typical `sourceInfo.source` values:
+- `builtin` for built-in tools
+- `sdk` for tools passed via `createAgentSession({ customTools })`
+- extension source metadata for tools registered by extensions
 
 ### pi.setModel(model)
 
@@ -1190,7 +1522,7 @@ if (model) {
 
 ### pi.getThinkingLevel() / pi.setThinkingLevel(level)
 
-Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off").
+Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off"). Changes emit `thinking_level_select`.
 
 ```typescript
 const current = pi.getThinkingLevel();  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
@@ -1212,9 +1544,12 @@ Register or override a model provider dynamically. Useful for proxies, custom en
 
 Calls made during the extension factory function are queued and applied once the runner initialises. Calls made after that — for example from a command handler following a user setup flow — take effect immediately without requiring a `/reload`.
 
+If you need to discover models from a remote endpoint, prefer an async extension factory over deferring the fetch to `session_start`. pi waits for the factory before startup continues, so the registered models are available immediately, including to `pi --list-models`.
+
 ```typescript
 // Register a new provider with custom models
 pi.registerProvider("my-proxy", {
+  name: "My Proxy",
   baseUrl: "https://proxy.example.com",
   apiKey: "PROXY_API_KEY",  // env var name or literal
   api: "anthropic-messages",
@@ -1261,6 +1596,7 @@ pi.registerProvider("corporate-ai", {
 ```
 
 **Config options:**
+- `name` - Display name for the provider in UI such as `/login`.
 - `baseUrl` - API endpoint URL. Required when defining models.
 - `apiKey` - API key or environment variable name. Required when defining models (unless `oauth` provided).
 - `api` - API type: `"anthropic-messages"`, `"openai-completions"`, `"openai-responses"`, etc.
@@ -1325,16 +1661,48 @@ export default function (pi: ExtensionAPI) {
 
 Register tools the LLM can call via `pi.registerTool()`. Tools appear in the system prompt and can have custom rendering.
 
-Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, pi falls back to `description`.
+Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, custom tools are left out of that section.
 
 Use `promptGuidelines` to add tool-specific bullets to the default system prompt `Guidelines` section. These bullets are included only while the tool is active (for example, after `pi.setActiveTools([...])`).
 
+**Important:** `promptGuidelines` bullets are appended flat to the `Guidelines` section with no tool name prefix or grouping. Each guideline must name the tool it refers to — avoid "Use this tool when..." because the LLM cannot tell which tool "this" means. Write "Use my_tool when..." instead.
+
 Note: Some models are idiots and include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
+
+If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls run in parallel by default. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
+
+Example failure case: your custom tool edits `foo.ts` while built-in `edit` also changes `foo.ts` in the same assistant turn. If your tool does not participate in the queue, both can read the original `foo.ts`, apply separate changes, and one of those changes is lost.
+
+Pass the real target file path to `withFileMutationQueue()`, not the raw user argument. Resolve it to an absolute path first, relative to `ctx.cwd` or your tool's working directory. For existing files, the helper canonicalizes through `realpath()`, so symlink aliases for the same file share one queue. For new files, it falls back to the resolved absolute path because there is nothing to `realpath()` yet.
+
+Queue the entire mutation window on that target path. That includes read-modify-write logic, not just the final write.
+
+```typescript
+import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+
+async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+  const absolutePath = resolve(ctx.cwd, params.path);
+
+  return withFileMutationQueue(absolutePath, async () => {
+    await mkdir(dirname(absolutePath), { recursive: true });
+    const current = await readFile(absolutePath, "utf8");
+    const next = current.replace(params.oldText, params.newText);
+    await writeFile(absolutePath, next, "utf8");
+
+    return {
+      content: [{ type: "text", text: `Updated ${params.path}` }],
+      details: {},
+    };
+  });
+}
+```
 
 ### Tool Definition
 
 ```typescript
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 
@@ -1344,12 +1712,20 @@ pi.registerTool({
   description: "What this tool does (shown to LLM)",
   promptSnippet: "List or add items in the project todo list",
   promptGuidelines: [
-    "Use this tool for todo planning instead of direct file edits when the user asks for a task list."
+    "Use my_tool for todo planning instead of direct file edits when the user asks for a task list."
   ],
   parameters: Type.Object({
     action: StringEnum(["list", "add"] as const),  // Use StringEnum for Google compatibility
     text: Type.Optional(Type.String()),
   }),
+  prepareArguments(args) {
+    if (!args || typeof args !== "object") return args;
+    const input = args as { action?: string; oldAction?: string };
+    if (typeof input.oldAction === "string" && input.action === undefined) {
+      return { ...input, action: input.oldAction };
+    }
+    return args;
+  },
 
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     // Check for cancellation
@@ -1370,16 +1746,21 @@ pi.registerTool({
     return {
       content: [{ type: "text", text: "Done" }],  // Sent to LLM
       details: { data: result },                   // For rendering & state
+      // Optional: stop after this tool batch when every finalized tool result
+      // in the batch also returns terminate: true.
+      terminate: true,
     };
   },
 
   // Optional: Custom rendering
-  renderCall(args, theme) { ... },
-  renderResult(result, options, theme) { ... },
+  renderCall(args, theme, context) { ... },
+  renderResult(result, options, theme, context) { ... },
 });
 ```
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+
+**Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
 ```typescript
 // Correct: throw to signal an error
@@ -1393,6 +1774,53 @@ async execute(toolCallId, params) {
 
 **Important:** Use `StringEnum` from `@mariozechner/pi-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
+**Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when pi resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
+
+Example: an older session may contain an `edit` tool call with top-level `oldText` and `newText`, while the current schema only accepts `edits: [{ oldText, newText }]`.
+
+```typescript
+pi.registerTool({
+  name: "edit",
+  label: "Edit",
+  description: "Edit a single file using exact text replacement",
+  parameters: Type.Object({
+    path: Type.String(),
+    edits: Type.Array(
+      Type.Object({
+        oldText: Type.String(),
+        newText: Type.String(),
+      }),
+    ),
+  }),
+  prepareArguments(args) {
+    if (!args || typeof args !== "object") return args;
+
+    const input = args as {
+      path?: string;
+      edits?: Array<{ oldText: string; newText: string }>;
+      oldText?: unknown;
+      newText?: unknown;
+    };
+
+    if (typeof input.oldText !== "string" || typeof input.newText !== "string") {
+      return args;
+    }
+
+    return {
+      ...input,
+      edits: [...(input.edits ?? []), { oldText: input.oldText, newText: input.newText }],
+    };
+  },
+  async execute(toolCallId, params, signal, onUpdate, ctx) {
+    // params now matches the current schema
+    return {
+      content: [{ type: "text", text: `Applying ${params.edits.length} edit block(s)` }],
+      details: {},
+    };
+  },
+});
+```
+
 ### Overriding Built-in Tools
 
 Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
@@ -1402,15 +1830,17 @@ Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`,
 pi -e ./tool-override.ts
 ```
 
-Alternatively, use `--no-tools` to start without any built-in tools:
+Alternatively, use `--no-builtin-tools` to start without any built-in tools while keeping extension tools enabled:
 ```bash
 # No built-in tools, only extension tools
-pi --no-tools -e ./my-extension.ts
+pi --no-builtin-tools -e ./my-extension.ts
 ```
 
 See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete example that overrides `read` with logging and access control.
 
-**Rendering:** If your override doesn't provide custom `renderCall`/`renderResult` functions, the built-in renderer is used automatically (syntax highlighting, diffs, etc.). This lets you wrap built-in tools for logging or access control without reimplementing the UI.
+**Rendering:** Built-in renderer inheritance is resolved per slot. Execution override and rendering override are independent. If your override omits `renderCall`, the built-in `renderCall` is used. If your override omits `renderResult`, the built-in `renderResult` is used. If your override omits both, the built-in renderer is used automatically (syntax highlighting, diffs, etc.). This lets you wrap built-in tools for logging or access control without reimplementing the UI.
+
+**Prompt metadata:** `promptSnippet` and `promptGuidelines` are not inherited from the built-in tool. If your override should keep those prompt instructions, define them on the override explicitly.
 
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
@@ -1453,6 +1883,8 @@ pi.registerTool({
 ```
 
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
+
+For `user_bash`, extensions can reuse pi's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
 The bash tool also supports a spawn hook to adjust the command, cwd, or env before execution:
 
@@ -1542,44 +1974,70 @@ export default function (pi: ExtensionAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how built-in tools render.
+Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
 
-Tool output is wrapped in a `Box` that handles padding and background. Your render methods return `Component` instances (typically `Text`).
+By default, tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
+
+Set `renderShell: "self"` when the tool should render its own shell instead of using the default `Box`. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
+
+```typescript
+pi.registerTool({
+  name: "my_tool",
+  label: "My Tool",
+  description: "Custom shell example",
+  parameters: Type.Object({}),
+  renderShell: "self",
+  async execute() {
+    return { content: [{ type: "text", text: "ok" }], details: undefined };
+  },
+  renderCall(args, theme, context) {
+    return new Text(theme.fg("accent", "my custom shell"), 0, 0);
+  },
+});
+```
+
+`renderCall` and `renderResult` each receive a `context` object with:
+- `args` - the current tool call arguments
+- `state` - shared row-local state across `renderCall` and `renderResult`
+- `lastComponent` - the previously returned component for that slot, if any
+- `invalidate()` - request a rerender of this tool row
+- `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
+
+Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 
 #### renderCall
 
-Renders the tool call (before/during execution):
+Renders the tool call or header:
 
 ```typescript
 import { Text } from "@mariozechner/pi-tui";
 
-renderCall(args, theme) {
-  let text = theme.fg("toolTitle", theme.bold("my_tool "));
-  text += theme.fg("muted", args.action);
+renderCall(args, theme, context) {
+  const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+  let content = theme.fg("toolTitle", theme.bold("my_tool "));
+  content += theme.fg("muted", args.action);
   if (args.text) {
-    text += " " + theme.fg("dim", `"${args.text}"`);
+    content += " " + theme.fg("dim", `"${args.text}"`);
   }
-  return new Text(text, 0, 0);  // 0,0 padding - Box handles it
+  text.setText(content);
+  return text;
 }
 ```
 
 #### renderResult
 
-Renders the tool result:
+Renders the tool result or output:
 
 ```typescript
-renderResult(result, { expanded, isPartial }, theme) {
-  // Handle streaming
+renderResult(result, { expanded, isPartial }, theme, context) {
   if (isPartial) {
     return new Text(theme.fg("warning", "Processing..."), 0, 0);
   }
 
-  // Handle errors
   if (result.details?.error) {
     return new Text(theme.fg("error", `Error: ${result.details.error}`), 0, 0);
   }
 
-  // Normal result - support expanded view (Ctrl+O)
   let text = theme.fg("success", "✓ Done");
   if (expanded && result.details?.items) {
     for (const item of result.details.items) {
@@ -1590,40 +2048,53 @@ renderResult(result, { expanded, isPartial }, theme) {
 }
 ```
 
+If a slot intentionally has no visible content, return an empty `Component` such as an empty `Container`.
+
 #### Keybinding Hints
 
-Use `keyHint()` to display keybinding hints that respect user's keybinding configuration:
+Use `keyHint()` to display keybinding hints that respect the active keybinding configuration:
 
 ```typescript
 import { keyHint } from "@mariozechner/pi-coding-agent";
 
-renderResult(result, { expanded }, theme) {
+renderResult(result, { expanded }, theme, context) {
   let text = theme.fg("success", "✓ Done");
   if (!expanded) {
-    text += ` (${keyHint("expandTools", "to expand")})`;
+    text += ` (${keyHint("app.tools.expand", "to expand")})`;
   }
   return new Text(text, 0, 0);
 }
 ```
 
 Available functions:
-- `keyHint(action, description)` - Editor actions (e.g., `"expandTools"`, `"selectConfirm"`)
-- `appKeyHint(keybindings, action, description)` - App actions (requires `KeybindingsManager`)
-- `editorKey(action)` - Get raw key string for editor action
+- `keyHint(keybinding, description)` - Formats a configured keybinding id such as `"app.tools.expand"` or `"tui.select.confirm"`
+- `keyText(keybinding)` - Returns the raw configured key text for a keybinding id
 - `rawKeyHint(key, description)` - Format a raw key string
+
+Use namespaced keybinding ids:
+- Coding-agent ids use the `app.*` namespace, for example `app.tools.expand`, `app.editor.external`, `app.session.rename`
+- Shared TUI ids use the `tui.*` namespace, for example `tui.select.confirm`, `tui.select.cancel`, `tui.input.tab`
+
+For the exhaustive list of keybinding ids and defaults, see [keybindings.md](keybindings.md). `keybindings.json` uses those same namespaced ids.
+
+Custom editors and `ctx.ui.custom()` components receive `keybindings: KeybindingsManager` as an injected argument. They should use that injected manager directly instead of calling `getKeybindings()` or `setKeybindings()`.
 
 #### Best Practices
 
-- Use `Text` with padding `(0, 0)` - the Box handles padding
-- Use `\n` for multi-line content
-- Handle `isPartial` for streaming progress
-- Support `expanded` for detail on demand
-- Keep default view compact
+- Use `Text` with padding `(0, 0)`. The default Box handles padding.
+- Use `\n` for multi-line content.
+- Handle `isPartial` for streaming progress.
+- Support `expanded` for detail on demand.
+- Keep default view compact.
+- Read `context.args` in `renderResult` instead of copying args into `context.state`.
+- Use `context.state` only for data that must be shared across call and result slots.
+- Reuse `context.lastComponent` when the same component instance can be updated in place.
+- Use `renderShell: "self"` only when the default boxed shell gets in the way. In self-shell mode the tool is responsible for its own framing, padding, and background.
 
 #### Fallback
 
-If `renderCall`/`renderResult` is not defined or throws:
-- `renderCall`: Shows tool name
+If a slot renderer is not defined or throws:
+- `renderCall`: Shows the tool name
 - `renderResult`: Shows raw text from `content`
 
 ## Custom UI
@@ -1635,8 +2106,9 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Async operations with cancel (BorderedLoader)
 - Settings toggles (SettingsList)
 - Status indicators (setStatus)
-- Working message during streaming (setWorkingMessage)
+- Working message, visibility, and indicator during streaming (`setWorkingMessage`, `setWorkingVisible`, `setWorkingIndicator`)
 - Widgets above/below editor (setWidget)
+- Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
 
 ### Dialogs
@@ -1716,9 +2188,25 @@ See [examples/extensions/timed-confirm.ts](../examples/extensions/timed-confirm.
 ctx.ui.setStatus("my-ext", "Processing...");
 ctx.ui.setStatus("my-ext", undefined);  // Clear
 
-// Working message (shown during streaming)
+// Working loader (shown during streaming)
 ctx.ui.setWorkingMessage("Thinking deeply...");
 ctx.ui.setWorkingMessage();  // Restore default
+ctx.ui.setWorkingVisible(false);  // Hide the built-in working loader row entirely
+ctx.ui.setWorkingVisible(true);   // Show the built-in working loader row
+
+// Working indicator (shown during streaming)
+ctx.ui.setWorkingIndicator({ frames: [ctx.ui.theme.fg("accent", "●")] });  // Static dot
+ctx.ui.setWorkingIndicator({
+  frames: [
+    ctx.ui.theme.fg("dim", "·"),
+    ctx.ui.theme.fg("muted", "•"),
+    ctx.ui.theme.fg("accent", "●"),
+    ctx.ui.theme.fg("muted", "•"),
+  ],
+  intervalMs: 120,
+});
+ctx.ui.setWorkingIndicator({ frames: [] });  // Hide indicator
+ctx.ui.setWorkingIndicator();  // Restore default spinner
 
 // Widget above editor (default)
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"]);
@@ -1744,6 +2232,28 @@ const current = ctx.ui.getEditorText();
 // Paste into editor (triggers paste handling, including collapse for large content)
 ctx.ui.pasteToEditor("pasted content");
 
+// Stack custom autocomplete behavior on top of the built-in provider
+ctx.ui.addAutocompleteProvider((current) => ({
+  async getSuggestions(lines, line, col, options) {
+    const beforeCursor = (lines[line] ?? "").slice(0, col);
+    const match = beforeCursor.match(/(?:^|[ \t])#([^\s#]*)$/);
+    if (!match) {
+      return current.getSuggestions(lines, line, col, options);
+    }
+
+    return {
+      prefix: `#${match[1] ?? ""}`,
+      items: [{ value: "#2983", label: "#2983", description: "Extension API for autocomplete" }],
+    };
+  },
+  applyCompletion(lines, line, col, item, prefix) {
+    return current.applyCompletion(lines, line, col, item, prefix);
+  },
+  shouldTriggerFileCompletion(lines, line, col) {
+    return current.shouldTriggerFileCompletion?.(lines, line, col) ?? true;
+  },
+}));
+
 // Tool output expansion
 const wasExpanded = ctx.ui.getToolsExpanded();
 ctx.ui.setToolsExpanded(true);
@@ -1751,6 +2261,10 @@ ctx.ui.setToolsExpanded(wasExpanded);
 
 // Custom editor (vim mode, emacs mode, etc.)
 ctx.ui.setEditorComponent((tui, theme, keybindings) => new VimEditor(tui, theme, keybindings));
+const currentEditor = ctx.ui.getEditorComponent();
+ctx.ui.setEditorComponent((tui, theme, keybindings) =>
+  new WrappedEditor(tui, theme, keybindings, currentEditor?.(tui, theme, keybindings))
+);
 ctx.ui.setEditorComponent(undefined);  // Restore default editor
 
 // Theme management (see themes.md for creating themes)
@@ -1763,6 +2277,52 @@ if (!result.success) {
 ctx.ui.setTheme(lightTheme!);  // Or switch by Theme object
 ctx.ui.theme.fg("accent", "styled text");  // Access current theme
 ```
+
+Custom working-indicator frames are rendered verbatim. If you want colors, add them to the frame strings yourself, for example with `ctx.ui.theme.fg(...)`.
+
+### Autocomplete Providers
+
+Use `ctx.ui.addAutocompleteProvider()` to stack custom autocomplete logic on top of the built-in slash-command and path provider.
+
+Typical pattern:
+
+- inspect the text before the cursor
+- return your own suggestions when your extension-specific syntax matches
+- otherwise delegate to `current.getSuggestions(...)`
+- delegate `applyCompletion(...)` unless you need custom insertion behavior
+
+```typescript
+pi.on("session_start", (_event, ctx) => {
+  ctx.ui.addAutocompleteProvider((current) => ({
+    async getSuggestions(lines, cursorLine, cursorCol, options) {
+      const line = lines[cursorLine] ?? "";
+      const beforeCursor = line.slice(0, cursorCol);
+      const match = beforeCursor.match(/(?:^|[ \t])#([^\s#]*)$/);
+      if (!match) {
+        return current.getSuggestions(lines, cursorLine, cursorCol, options);
+      }
+
+      return {
+        prefix: `#${match[1] ?? ""}`,
+        items: [
+          { value: "#2983", label: "#2983", description: "Extension API for registering custom @ autocomplete providers" },
+          { value: "#2753", label: "#2753", description: "Reload stale resource settings" },
+        ],
+      };
+    },
+
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+    },
+
+    shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+      return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+    },
+  }));
+});
+```
+
+See [github-issue-autocomplete.ts](../examples/extensions/github-issue-autocomplete.ts) for a complete example that preloads the latest open GitHub issues with `gh issue list` and filters them locally for fast `#...` completion. It requires GitHub CLI (`gh`) and a GitHub repository checkout.
 
 ### Custom Components
 
@@ -1859,7 +2419,17 @@ export default function (pi: ExtensionAPI) {
 - Extend `CustomEditor` (not base `Editor`) to get app keybindings (escape to abort, ctrl+d, model switching)
 - Call `super.handleInput(data)` for keys you don't handle
 - Factory receives `theme` and `keybindings` from the app
+- Use `ctx.ui.getEditorComponent()` before `setEditorComponent()` to wrap the previously configured custom editor
 - Pass `undefined` to restore default: `ctx.ui.setEditorComponent(undefined)`
+
+To compose with another extension that already replaced the editor, capture the previous factory before setting yours:
+
+```typescript
+const previous = ctx.ui.getEditorComponent();
+ctx.ui.setEditorComponent((tui, theme, keybindings) =>
+  new MyEditor(tui, theme, keybindings, { base: previous?.(tui, theme, keybindings) })
+);
+```
 
 See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
@@ -1956,6 +2526,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `questionnaire.ts` | Multi-step wizard tool | `registerTool`, `ui.custom` |
 | `todo.ts` | Stateful tool with persistence | `registerTool`, `appendEntry`, `renderResult`, session events |
 | `dynamic-tools.ts` | Register tools after startup and during commands | `registerTool`, `session_start`, `registerCommand` |
+| `structured-output.ts` | Final structured-output tool with `terminate: true` | `registerTool`, terminating tool results |
 | `truncated-tool.ts` | Output truncation example | `registerTool`, `truncateHead` |
 | `tool-override.ts` | Override built-in read tool | `registerTool` (same name as built-in) |
 | **Commands** |||
@@ -1973,17 +2544,20 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `dirty-repo-guard.ts` | Warn on dirty git repo | `on("session_before_*")`, `exec` |
 | `input-transform.ts` | Transform user input | `on("input")` |
 | `model-status.ts` | React to model changes | `on("model_select")`, `setStatus` |
-| `provider-payload.ts` | Inspect or patch provider payloads | `on("before_provider_request")` |
+| `provider-payload.ts` | Inspect payloads and provider response headers | `on("before_provider_request")`, `on("after_provider_response")` |
 | `system-prompt-header.ts` | Display system prompt info | `on("agent_start")`, `getSystemPrompt` |
 | `claude-rules.ts` | Load rules from files | `on("session_start")`, `on("before_agent_start")` |
+| `prompt-customizer.ts` | Add context-aware tool guidance using `systemPromptOptions` | `on("before_agent_start")`, `BuildSystemPromptOptions` |
 | `file-trigger.ts` | File watcher triggers messages | `sendMessage` |
 | **Compaction & Sessions** |||
 | `custom-compaction.ts` | Custom compaction summary | `on("session_before_compact")` |
 | `trigger-compact.ts` | Trigger compaction manually | `compact()` |
-| `git-checkpoint.ts` | Git stash on turns | `on("turn_end")`, `on("session_fork")`, `exec` |
+| `git-checkpoint.ts` | Git stash on turns | `on("turn_start")`, `on("session_before_fork")`, `exec` |
 | `auto-commit-on-exit.ts` | Commit on shutdown | `on("session_shutdown")`, `exec` |
 | **UI Components** |||
 | `status-line.ts` | Footer status indicator | `setStatus`, session events |
+| `working-indicator.ts` | Customize the streaming working indicator | `setWorkingIndicator`, `registerCommand` |
+| `github-issue-autocomplete.ts` | Add `#1234` issue completions on top of built-in autocomplete by preloading recent open issues from `gh issue list` | `addAutocompleteProvider`, `on("session_start")`, `exec` |
 | `custom-footer.ts` | Replace footer entirely | `registerCommand`, `setFooter` |
 | `custom-header.ts` | Replace startup header | `on("session_start")`, `setHeader` |
 | `modal-editor.ts` | Vim-style modal editor | `setEditorComponent`, `CustomEditor` |
@@ -2017,7 +2591,6 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `session-name.ts` | Name sessions for selector | `setSessionName`, `getSessionName` |
 | `bookmark.ts` | Bookmark entries for /tree | `setLabel` |
 | **Misc** |||
-| `antigravity-image-gen.ts` | Image generation tool | `registerTool`, Google Antigravity |
 | `inline-bash.ts` | Inline bash in tool calls | `on("tool_call")` |
 | `bash-spawn-hook.ts` | Adjust bash command, cwd, and env before execution | `createBashTool`, `spawnHook` |
 | `with-deps/` | Extension with npm dependencies | Package structure with `package.json` |

@@ -39,10 +39,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { Container, Key, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 
 // Preset configuration
@@ -68,7 +68,7 @@ interface PresetsConfig {
  * Project-local presets override global presets with the same name.
  */
 function loadPresets(cwd: string): PresetsConfig {
-	const globalPath = join(homedir(), ".pi", "agent", "presets.json");
+	const globalPath = join(getAgentDir(), "presets.json");
 	const projectPath = join(cwd, ".pi", "presets.json");
 
 	let globalPresets: PresetsConfig = {};
@@ -98,10 +98,17 @@ function loadPresets(cwd: string): PresetsConfig {
 	return { ...globalPresets, ...projectPresets };
 }
 
+interface OriginalState {
+	model: Model<Api> | undefined;
+	thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	tools: string[];
+}
+
 export default function presetExtension(pi: ExtensionAPI) {
 	let presets: PresetsConfig = {};
 	let activePresetName: string | undefined;
 	let activePreset: Preset | undefined;
+	let originalState: OriginalState | undefined;
 
 	// Register --preset CLI flag
 	pi.registerFlag("preset", {
@@ -113,6 +120,15 @@ export default function presetExtension(pi: ExtensionAPI) {
 	 * Apply a preset configuration.
 	 */
 	async function applyPreset(name: string, preset: Preset, ctx: ExtensionContext): Promise<boolean> {
+		// Snapshot state before the first preset is applied (i.e. only when transitioning from no-preset)
+		if (activePresetName === undefined) {
+			originalState = {
+				model: ctx.model,
+				thinkingLevel: pi.getThinkingLevel(),
+				tools: pi.getActiveTools(),
+			};
+		}
+
 		// Apply model if specified
 		if (preset.provider && preset.model) {
 			const model = ctx.modelRegistry.find(preset.provider, preset.model);
@@ -249,10 +265,18 @@ export default function presetExtension(pi: ExtensionAPI) {
 		if (!result) return;
 
 		if (result === "(none)") {
-			// Clear preset and restore defaults
+			// Clear preset and restore original state
 			activePresetName = undefined;
 			activePreset = undefined;
-			pi.setActiveTools(["read", "bash", "edit", "write"]);
+			if (originalState) {
+				if (originalState.model) {
+					await pi.setModel(originalState.model);
+				}
+				pi.setThinkingLevel(originalState.thinkingLevel);
+				pi.setActiveTools(originalState.tools);
+			} else {
+				pi.setActiveTools(["read", "bash", "edit", "write"]);
+			}
 			ctx.ui.notify("Preset cleared, defaults restored", "info");
 			updateStatus(ctx);
 			return;
@@ -297,7 +321,15 @@ export default function presetExtension(pi: ExtensionAPI) {
 		if (nextName === "(none)") {
 			activePresetName = undefined;
 			activePreset = undefined;
-			pi.setActiveTools(["read", "bash", "edit", "write"]);
+			if (originalState) {
+				if (originalState.model) {
+					await pi.setModel(originalState.model);
+				}
+				pi.setThinkingLevel(originalState.thinkingLevel);
+				pi.setActiveTools(originalState.tools);
+			} else {
+				pi.setActiveTools(["read", "bash", "edit", "write"]);
+			}
 			ctx.ui.notify("Preset cleared, defaults restored", "info");
 			updateStatus(ctx);
 			return;

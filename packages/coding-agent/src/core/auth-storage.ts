@@ -7,6 +7,7 @@
  */
 
 import {
+	findEnvKeys,
 	getEnvApiKey,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
@@ -31,6 +32,12 @@ export type OAuthCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+
+export type AuthStatus = {
+	configured: boolean;
+	source?: "stored" | "runtime" | "environment" | "fallback" | "models_json_key" | "models_json_command";
+	label?: string;
+};
 
 type LockResult<T> = {
 	result: T;
@@ -330,6 +337,30 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Return auth status without exposing credential values or refreshing tokens.
+	 */
+	getAuthStatus(provider: string): AuthStatus {
+		if (this.data[provider]) {
+			return { configured: true, source: "stored" };
+		}
+
+		if (this.runtimeOverrides.has(provider)) {
+			return { configured: false, source: "runtime", label: "--api-key" };
+		}
+
+		const envKeys = findEnvKeys(provider);
+		if (envKeys?.[0]) {
+			return { configured: false, source: "environment", label: envKeys[0] };
+		}
+
+		if (this.fallbackResolver?.(provider)) {
+			return { configured: false, source: "fallback", label: "custom provider config" };
+		}
+
+		return { configured: false };
+	}
+
+	/**
 	 * Get all credentials (for passing to getOAuthApiKey).
 	 */
 	getAll(): AuthStorageData {
@@ -421,7 +452,7 @@ export class AuthStorage {
 	 * 4. Environment variable
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
-	async getApiKey(providerId: string): Promise<string | undefined> {
+	async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.runtimeOverrides.get(providerId);
 		if (runtimeKey) {
@@ -477,7 +508,11 @@ export class AuthStorage {
 		if (envKey) return envKey;
 
 		// Fall back to custom resolver (e.g., models.json custom providers)
-		return this.fallbackResolver?.(providerId) ?? undefined;
+		if (options?.includeFallback !== false) {
+			return this.fallbackResolver?.(providerId) ?? undefined;
+		}
+
+		return undefined;
 	}
 
 	/**

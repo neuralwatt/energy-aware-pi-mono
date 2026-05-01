@@ -7,9 +7,10 @@ import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
-import type { KeyAction, KeybindingsConfig } from "../keybindings.js";
+import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
 import type { SessionManager } from "../session-manager.js";
+import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -33,15 +34,21 @@ import type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
+	MessageEndEvent,
+	MessageEndEventResult,
 	MessageRenderer,
+	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
+	ReplacedSessionContext,
+	ResolvedCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
 	SessionBeforeCompactResult,
 	SessionBeforeForkResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEvent,
@@ -50,40 +57,45 @@ import type {
 	UserBashEventResult,
 } from "./types.js";
 
-// Keybindings for these actions cannot be overridden by extensions
-const RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS: ReadonlyArray<KeyAction> = [
-	"interrupt",
-	"clear",
-	"exit",
-	"suspend",
-	"cycleThinkingLevel",
-	"cycleModelForward",
-	"cycleModelBackward",
-	"selectModel",
-	"expandTools",
-	"toggleThinking",
-	"externalEditor",
-	"followUp",
-	"submit",
-	"selectConfirm",
-	"selectCancel",
-	"copy",
-	"deleteToLineEnd",
-];
+// Extension shortcuts compete with canonical keybinding ids from keybindings.json.
+// Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
+const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
+	"app.interrupt",
+	"app.clear",
+	"app.exit",
+	"app.suspend",
+	"app.thinking.cycle",
+	"app.model.cycleForward",
+	"app.model.cycleBackward",
+	"app.model.select",
+	"app.tools.expand",
+	"app.thinking.toggle",
+	"app.editor.external",
+	"app.message.followUp",
+	"tui.input.submit",
+	"tui.select.confirm",
+	"tui.select.cancel",
+	"tui.input.copy",
+	"tui.editor.deleteToLineEnd",
+] as const;
 
-type BuiltInKeyBindings = Partial<Record<KeyId, { action: KeyAction; restrictOverride: boolean }>>;
+type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
-const buildBuiltinKeybindings = (effectiveKeybindings: Required<KeybindingsConfig>): BuiltInKeyBindings => {
+const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
-	for (const [action, keys] of Object.entries(effectiveKeybindings)) {
-		const keyAction = action as KeyAction;
+	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
+		if (keys === undefined) continue;
 		const keyList = Array.isArray(keys) ? keys : [keys];
-		const restrictOverride = RESERVED_ACTIONS_FOR_EXTENSION_CONFLICTS.includes(keyAction);
+		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
 		for (const key of keyList) {
 			const normalizedKey = key.toLowerCase() as KeyId;
+			// If multiple actions bind the same key, the reserved action wins so extensions
+			// remain blocked by reserved shortcuts regardless of iteration order.
+			const existing = builtinKeybindings[normalizedKey];
+			if (existing?.restrictOverride && !restrictOverride) continue;
 			builtinKeybindings[normalizedKey] = {
-				action: keyAction,
-				restrictOverride: restrictOverride,
+				keybinding,
+				restrictOverride,
 			};
 		}
 	}
@@ -108,6 +120,7 @@ type RunnerEmitEvent = Exclude<
 	| ContextEvent
 	| BeforeProviderRequestEvent
 	| BeforeAgentStartEvent
+	| MessageEndEvent
 	| ResourcesDiscoverEvent
 	| InputEvent
 >;
@@ -138,16 +151,23 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 export type NewSessionHandler = (options?: {
 	parentSession?: string;
 	setup?: (sessionManager: SessionManager) => Promise<void>;
+	withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 
-export type ForkHandler = (entryId: string) => Promise<{ cancelled: boolean }>;
+export type ForkHandler = (
+	entryId: string,
+	options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+) => Promise<{ cancelled: boolean }>;
 
 export type NavigateTreeHandler = (
 	targetId: string,
 	options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 ) => Promise<{ cancelled: boolean }>;
 
-export type SwitchSessionHandler = (sessionPath: string) => Promise<{ cancelled: boolean }>;
+export type SwitchSessionHandler = (
+	sessionPath: string,
+	options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+) => Promise<{ cancelled: boolean }>;
 
 export type ReloadHandler = () => Promise<void>;
 
@@ -157,11 +177,12 @@ export type ShutdownHandler = () => void;
  * Helper function to emit session_shutdown event to extensions.
  * Returns true if the event was emitted, false if there were no handlers.
  */
-export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner | undefined): Promise<boolean> {
-	if (extensionRunner?.hasHandlers("session_shutdown")) {
-		await extensionRunner.emit({
-			type: "session_shutdown",
-		});
+export async function emitSessionShutdownEvent(
+	extensionRunner: ExtensionRunner,
+	event: SessionShutdownEvent,
+): Promise<boolean> {
+	if (extensionRunner.hasHandlers("session_shutdown")) {
+		await extensionRunner.emit(event);
 		return true;
 	}
 	return false;
@@ -175,6 +196,9 @@ const noOpUIContext: ExtensionUIContext = {
 	onTerminalInput: () => () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},
+	setWorkingVisible: () => {},
+	setWorkingIndicator: () => {},
+	setHiddenThinkingLabel: () => {},
 	setWidget: () => {},
 	setFooter: () => {},
 	setHeader: () => {},
@@ -184,7 +208,9 @@ const noOpUIContext: ExtensionUIContext = {
 	setEditorText: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
+	addAutocompleteProvider: () => {},
 	setEditorComponent: () => {},
+	getEditorComponent: () => undefined,
 	get theme() {
 		return theme;
 	},
@@ -205,6 +231,7 @@ export class ExtensionRunner {
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private isIdleFn: () => boolean = () => true;
+	private getSignalFn: () => AbortSignal | undefined = () => undefined;
 	private waitForIdleFn: () => Promise<void> = async () => {};
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
@@ -219,6 +246,7 @@ export class ExtensionRunner {
 	private shutdownHandler: ShutdownHandler = () => {};
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
+	private staleMessage: string | undefined;
 
 	constructor(
 		extensions: Extension[],
@@ -235,7 +263,14 @@ export class ExtensionRunner {
 		this.modelRegistry = modelRegistry;
 	}
 
-	bindCore(actions: ExtensionActions, contextActions: ExtensionContextActions): void {
+	bindCore(
+		actions: ExtensionActions,
+		contextActions: ExtensionContextActions,
+		providerActions?: {
+			registerProvider?: (name: string, config: ProviderConfig) => void;
+			unregisterProvider?: (name: string) => void;
+		},
+	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
 		this.runtime.sendMessage = actions.sendMessage;
 		this.runtime.sendUserMessage = actions.sendUserMessage;
@@ -255,6 +290,7 @@ export class ExtensionRunner {
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
 		this.isIdleFn = contextActions.isIdle;
+		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.shutdownHandler = contextActions.shutdown;
@@ -263,15 +299,40 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 
 		// Flush provider registrations queued during extension loading
-		for (const { name, config } of this.runtime.pendingProviderRegistrations) {
-			this.modelRegistry.registerProvider(name, config);
+		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
+			try {
+				if (providerActions?.registerProvider) {
+					providerActions.registerProvider(name, config);
+				} else {
+					this.modelRegistry.registerProvider(name, config);
+				}
+			} catch (err) {
+				this.emitError({
+					extensionPath,
+					event: "register_provider",
+					error: err instanceof Error ? err.message : String(err),
+					stack: err instanceof Error ? err.stack : undefined,
+				});
+			}
 		}
 		this.runtime.pendingProviderRegistrations = [];
 
 		// From this point on, provider registration/unregistration takes effect immediately
 		// without requiring a /reload.
-		this.runtime.registerProvider = (name, config) => this.modelRegistry.registerProvider(name, config);
-		this.runtime.unregisterProvider = (name) => this.modelRegistry.unregisterProvider(name);
+		this.runtime.registerProvider = (name, config) => {
+			if (providerActions?.registerProvider) {
+				providerActions.registerProvider(name, config);
+				return;
+			}
+			this.modelRegistry.registerProvider(name, config);
+		};
+		this.runtime.unregisterProvider = (name) => {
+			if (providerActions?.unregisterProvider) {
+				providerActions.unregisterProvider(name);
+				return;
+			}
+			this.modelRegistry.unregisterProvider(name);
+		};
 	}
 
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
@@ -353,9 +414,9 @@ export class ExtensionRunner {
 		return new Map(this.runtime.flagValues);
 	}
 
-	getShortcuts(effectiveKeybindings: Required<KeybindingsConfig>): Map<KeyId, ExtensionShortcut> {
+	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, ExtensionShortcut> {
 		this.shortcutDiagnostics = [];
-		const builtinKeybindings = buildBuiltinKeybindings(effectiveKeybindings);
+		const builtinKeybindings = buildBuiltinKeybindings(resolvedKeybindings);
 		const extensionShortcuts = new Map<KeyId, ExtensionShortcut>();
 
 		const addDiagnostic = (message: string, extensionPath: string) => {
@@ -380,7 +441,7 @@ export class ExtensionRunner {
 
 				if (builtInKeybinding?.restrictOverride === false) {
 					addDiagnostic(
-						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.action} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
+						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
 						shortcut.extensionPath,
 					);
 				}
@@ -400,6 +461,21 @@ export class ExtensionRunner {
 
 	getShortcutDiagnostics(): ResourceDiagnostic[] {
 		return this.shortcutDiagnostics;
+	}
+
+	invalidate(
+		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+	): void {
+		if (!this.staleMessage) {
+			this.staleMessage = message;
+			this.runtime.invalidate(message);
+		}
+	}
+
+	private assertActive(): void {
+		if (this.staleMessage) {
+			throw new Error(this.staleMessage);
+		}
 	}
 
 	onError(listener: ExtensionErrorListener): () => void {
@@ -433,61 +509,53 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
-	getRegisteredCommands(reserved?: Set<string>): RegisteredCommand[] {
-		this.commandDiagnostics = [];
-
+	private resolveRegisteredCommands(): ResolvedCommand[] {
 		const commands: RegisteredCommand[] = [];
-		const commandOwners = new Map<string, string>();
+		const counts = new Map<string, number>();
+
 		for (const ext of this.extensions) {
 			for (const command of ext.commands.values()) {
-				if (reserved?.has(command.name)) {
-					const message = `Extension command '${command.name}' from ${ext.path} conflicts with built-in commands. Skipping.`;
-					this.commandDiagnostics.push({ type: "warning", message, path: ext.path });
-					if (!this.hasUI()) {
-						console.warn(message);
-					}
-					continue;
-				}
-
-				const existingOwner = commandOwners.get(command.name);
-				if (existingOwner) {
-					const message = `Extension command '${command.name}' from ${ext.path} conflicts with ${existingOwner}. Skipping.`;
-					this.commandDiagnostics.push({ type: "warning", message, path: ext.path });
-					if (!this.hasUI()) {
-						console.warn(message);
-					}
-					continue;
-				}
-
-				commandOwners.set(command.name, ext.path);
 				commands.push(command);
+				counts.set(command.name, (counts.get(command.name) ?? 0) + 1);
 			}
 		}
-		return commands;
+
+		const seen = new Map<string, number>();
+		const takenInvocationNames = new Set<string>();
+
+		return commands.map((command) => {
+			const occurrence = (seen.get(command.name) ?? 0) + 1;
+			seen.set(command.name, occurrence);
+
+			let invocationName = (counts.get(command.name) ?? 0) > 1 ? `${command.name}:${occurrence}` : command.name;
+
+			if (takenInvocationNames.has(invocationName)) {
+				let suffix = occurrence;
+				do {
+					suffix++;
+					invocationName = `${command.name}:${suffix}`;
+				} while (takenInvocationNames.has(invocationName));
+			}
+
+			takenInvocationNames.add(invocationName);
+			return {
+				...command,
+				invocationName,
+			};
+		});
+	}
+
+	getRegisteredCommands(): ResolvedCommand[] {
+		this.commandDiagnostics = [];
+		return this.resolveRegisteredCommands();
 	}
 
 	getCommandDiagnostics(): ResourceDiagnostic[] {
 		return this.commandDiagnostics;
 	}
 
-	getRegisteredCommandsWithPaths(): Array<{ command: RegisteredCommand; extensionPath: string }> {
-		const result: Array<{ command: RegisteredCommand; extensionPath: string }> = [];
-		for (const ext of this.extensions) {
-			for (const command of ext.commands.values()) {
-				result.push({ command, extensionPath: ext.path });
-			}
-		}
-		return result;
-	}
-
-	getCommand(name: string): RegisteredCommand | undefined {
-		for (const ext of this.extensions) {
-			const command = ext.commands.get(name);
-			if (command) {
-				return command;
-			}
-		}
-		return undefined;
+	getCommand(name: string): ResolvedCommand | undefined {
+		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
 	}
 
 	/**
@@ -503,36 +571,101 @@ export class ExtensionRunner {
 	 * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
 	 */
 	createContext(): ExtensionContext {
+		const runner = this;
 		const getModel = this.getModel;
 		return {
-			ui: this.uiContext,
-			hasUI: this.hasUI(),
-			cwd: this.cwd,
-			sessionManager: this.sessionManager,
-			modelRegistry: this.modelRegistry,
+			get ui() {
+				runner.assertActive();
+				return runner.uiContext;
+			},
+			get hasUI() {
+				runner.assertActive();
+				return runner.hasUI();
+			},
+			get cwd() {
+				runner.assertActive();
+				return runner.cwd;
+			},
+			get sessionManager() {
+				runner.assertActive();
+				return runner.sessionManager;
+			},
+			get modelRegistry() {
+				runner.assertActive();
+				return runner.modelRegistry;
+			},
 			get model() {
+				runner.assertActive();
 				return getModel();
 			},
-			isIdle: () => this.isIdleFn(),
-			abort: () => this.abortFn(),
-			hasPendingMessages: () => this.hasPendingMessagesFn(),
-			shutdown: () => this.shutdownHandler(),
-			getContextUsage: () => this.getContextUsageFn(),
-			compact: (options) => this.compactFn(options),
-			getSystemPrompt: () => this.getSystemPromptFn(),
+			isIdle: () => {
+				runner.assertActive();
+				return runner.isIdleFn();
+			},
+			get signal() {
+				runner.assertActive();
+				return runner.getSignalFn();
+			},
+			abort: () => {
+				runner.assertActive();
+				runner.abortFn();
+			},
+			hasPendingMessages: () => {
+				runner.assertActive();
+				return runner.hasPendingMessagesFn();
+			},
+			shutdown: () => {
+				runner.assertActive();
+				runner.shutdownHandler();
+			},
+			getContextUsage: () => {
+				runner.assertActive();
+				return runner.getContextUsageFn();
+			},
+			compact: (options) => {
+				runner.assertActive();
+				runner.compactFn(options);
+			},
+			getSystemPrompt: () => {
+				runner.assertActive();
+				return runner.getSystemPromptFn();
+			},
 		};
 	}
 
 	createCommandContext(): ExtensionCommandContext {
-		return {
-			...this.createContext(),
-			waitForIdle: () => this.waitForIdleFn(),
-			newSession: (options) => this.newSessionHandler(options),
-			fork: (entryId) => this.forkHandler(entryId),
-			navigateTree: (targetId, options) => this.navigateTreeHandler(targetId, options),
-			switchSession: (sessionPath) => this.switchSessionHandler(sessionPath),
-			reload: () => this.reloadHandler(),
+		// Use property descriptors instead of object spread so the guarded getters from
+		// createContext() stay lazy. A spread would eagerly read them once and freeze the
+		// old values into the returned object, bypassing stale-instance checks.
+		const context = Object.defineProperties(
+			{},
+			Object.getOwnPropertyDescriptors(this.createContext()),
+		) as ExtensionCommandContext;
+		context.waitForIdle = () => {
+			this.assertActive();
+			return this.waitForIdleFn();
 		};
+		context.newSession = (options) => {
+			this.assertActive();
+			return this.newSessionHandler(options);
+		};
+		context.fork = (entryId, options) => {
+			this.assertActive();
+			return this.forkHandler(entryId, options);
+		};
+		context.navigateTree = (targetId, options) => {
+			this.assertActive();
+			return this.navigateTreeHandler(targetId, options);
+		};
+		context.switchSession = (sessionPath, options) => {
+			this.assertActive();
+			return this.switchSessionHandler(sessionPath, options);
+		};
+		context.reload = () => {
+			this.assertActive();
+			return this.reloadHandler();
+		};
+		return context;
 	}
 
 	private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
@@ -576,6 +709,48 @@ export class ExtensionRunner {
 		}
 
 		return result as RunnerEmitResult<TEvent>;
+	}
+
+	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
+		const ctx = this.createContext();
+		let currentMessage = event.message;
+		let modified = false;
+
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("message_end");
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				try {
+					const currentEvent: MessageEndEvent = { ...event, message: currentMessage };
+					const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
+					if (!handlerResult?.message) continue;
+
+					if (handlerResult.message.role !== currentMessage.role) {
+						this.emitError({
+							extensionPath: ext.path,
+							event: "message_end",
+							error: "message_end handlers must return a message with the same role",
+						});
+						continue;
+					}
+
+					currentMessage = handlerResult.message;
+					modified = true;
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "message_end",
+						error: message,
+						stack,
+					});
+				}
+			}
+		}
+
+		return modified ? currentMessage : undefined;
 	}
 
 	async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
@@ -750,10 +925,18 @@ export class ExtensionRunner {
 		prompt: string,
 		images: ImageContent[] | undefined,
 		systemPrompt: string,
+		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
-		const ctx = this.createContext();
-		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
 		let currentSystemPrompt = systemPrompt;
+		const ctx = Object.defineProperties(
+			{},
+			Object.getOwnPropertyDescriptors(this.createContext()),
+		) as ExtensionContext;
+		ctx.getSystemPrompt = () => {
+			this.assertActive();
+			return currentSystemPrompt;
+		};
+		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
 		let systemPromptModified = false;
 
 		for (const ext of this.extensions) {
@@ -767,6 +950,7 @@ export class ExtensionRunner {
 						prompt,
 						images,
 						systemPrompt: currentSystemPrompt,
+						systemPromptOptions,
 					};
 					const handlerResult = await handler(event, ctx);
 

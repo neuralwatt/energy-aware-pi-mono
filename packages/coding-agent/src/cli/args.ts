@@ -4,8 +4,8 @@
 
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import chalk from "chalk";
-import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
-import { allTools, type ToolName } from "../core/tools/index.js";
+import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.js";
+import type { ExtensionFlag } from "../core/extensions/types.js";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -14,7 +14,7 @@ export interface Args {
 	model?: string;
 	apiKey?: string;
 	systemPrompt?: string;
-	appendSystemPrompt?: string;
+	appendSystemPrompt?: string[];
 	thinking?: ThinkingLevel;
 	continue?: boolean;
 	resume?: boolean;
@@ -23,10 +23,12 @@ export interface Args {
 	mode?: Mode;
 	noSession?: boolean;
 	session?: string;
+	fork?: string;
 	sessionDir?: string;
 	models?: string[];
-	tools?: ToolName[];
+	tools?: string[];
 	noTools?: boolean;
+	noBuiltinTools?: boolean;
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
@@ -37,6 +39,7 @@ export interface Args {
 	noPromptTemplates?: boolean;
 	themes?: string[];
 	noThemes?: boolean;
+	noContextFiles?: boolean;
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
@@ -44,6 +47,7 @@ export interface Args {
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
+	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -52,11 +56,12 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
-export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
+export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
+		diagnostics: [],
 	};
 
 	for (let i = 0; i < args.length; i++) {
@@ -84,40 +89,36 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 		} else if (arg === "--system-prompt" && i + 1 < args.length) {
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
-			result.appendSystemPrompt = args[++i];
+			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
+			result.appendSystemPrompt.push(args[++i]);
 		} else if (arg === "--no-session") {
 			result.noSession = true;
 		} else if (arg === "--session" && i + 1 < args.length) {
 			result.session = args[++i];
+		} else if (arg === "--fork" && i + 1 < args.length) {
+			result.fork = args[++i];
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
 			result.sessionDir = args[++i];
 		} else if (arg === "--models" && i + 1 < args.length) {
 			result.models = args[++i].split(",").map((s) => s.trim());
-		} else if (arg === "--no-tools") {
+		} else if (arg === "--no-tools" || arg === "-nt") {
 			result.noTools = true;
-		} else if (arg === "--tools" && i + 1 < args.length) {
-			const toolNames = args[++i].split(",").map((s) => s.trim());
-			const validTools: ToolName[] = [];
-			for (const name of toolNames) {
-				if (name in allTools) {
-					validTools.push(name as ToolName);
-				} else {
-					console.error(
-						chalk.yellow(`Warning: Unknown tool "${name}". Valid tools: ${Object.keys(allTools).join(", ")}`),
-					);
-				}
-			}
-			result.tools = validTools;
+		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
+			result.noBuiltinTools = true;
+		} else if ((arg === "--tools" || arg === "-t") && i + 1 < args.length) {
+			result.tools = args[++i]
+				.split(",")
+				.map((s) => s.trim())
+				.filter((name) => name.length > 0);
 		} else if (arg === "--thinking" && i + 1 < args.length) {
 			const level = args[++i];
 			if (isValidThinkingLevel(level)) {
 				result.thinking = level;
 			} else {
-				console.error(
-					chalk.yellow(
-						`Warning: Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-					),
-				);
+				result.diagnostics.push({
+					type: "warning",
+					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+				});
 			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
@@ -143,6 +144,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noPromptTemplates = true;
 		} else if (arg === "--no-themes") {
 			result.noThemes = true;
+		} else if (arg === "--no-context-files" || arg === "-nc") {
+			result.noContextFiles = true;
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
@@ -156,18 +159,22 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.offline = true;
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
-		} else if (arg.startsWith("--") && extensionFlags) {
-			// Check if it's an extension-registered flag
-			const flagName = arg.slice(2);
-			const extFlag = extensionFlags.get(flagName);
-			if (extFlag) {
-				if (extFlag.type === "boolean") {
+		} else if (arg.startsWith("--")) {
+			const eqIndex = arg.indexOf("=");
+			if (eqIndex !== -1) {
+				result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
+			} else {
+				const flagName = arg.slice(2);
+				const next = args[i + 1];
+				if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
+					result.unknownFlags.set(flagName, next);
+					i++;
+				} else {
 					result.unknownFlags.set(flagName, true);
-				} else if (extFlag.type === "string" && i + 1 < args.length) {
-					result.unknownFlags.set(flagName, args[++i]);
 				}
 			}
-			// Unknown flags without extensionFlags are silently ignored (first pass)
+		} else if (arg.startsWith("-") && !arg.startsWith("--")) {
+			result.diagnostics.push({ type: "error", message: `Unknown option: ${arg}` });
 		} else if (!arg.startsWith("-")) {
 			result.messages.push(arg);
 		}
@@ -176,38 +183,51 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 	return result;
 }
 
-export function printHelp(): void {
+export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+	const extensionFlagsText =
+		extensionFlags && extensionFlags.length > 0
+			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
+					.map((flag) => {
+						const value = flag.type === "string" ? " <value>" : "";
+						const description = flag.description ?? `Registered by ${flag.extensionPath}`;
+						return `  --${flag.name}${value}`.padEnd(30) + description;
+					})
+					.join("\n")}\n`
+			: "";
 	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} install <source> [-l]    Install extension source and add to settings
-  ${APP_NAME} remove <source> [-l]     Remove extension source from settings
-  ${APP_NAME} update [source]          Update installed extensions (skips pinned sources)
-  ${APP_NAME} list                     List installed extensions from settings
-  ${APP_NAME} config                   Open TUI to enable/disable package resources
-  ${APP_NAME} <command> --help         Show help for install/remove/update/list
+  ${APP_NAME} install <source> [-l]     Install extension source and add to settings
+  ${APP_NAME} remove <source> [-l]      Remove extension source from settings
+  ${APP_NAME} uninstall <source> [-l]   Alias for remove
+  ${APP_NAME} update [source|self|pi]   Update pi and installed extensions
+  ${APP_NAME} list                      List installed extensions from settings
+  ${APP_NAME} config                    Open TUI to enable/disable package resources
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
-  --append-system-prompt <text>  Append text or file contents to the system prompt
+  --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
-  --session <path>               Use specific session file
+  --session <path|id>            Use specific session file or partial UUID
+  --fork <path|id>               Fork specific session file or partial UUID into a new session
   --session-dir <dir>            Directory for session storage and lookup
   --no-session                   Don't save session (ephemeral)
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
-  --no-tools                     Disable all built-in tools
-  --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write)
-                                 Available: read, bash, edit, write, grep, find, ls
+  --no-tools, -nt                Disable all tools by default (built-in and extension)
+  --no-builtin-tools, -nbt       Disable built-in tools by default but keep extension/custom tools enabled
+  --tools, -t <tools>            Comma-separated allowlist of tool names to enable
+                                 Applies to built-in, extension, and custom tools
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
@@ -217,6 +237,7 @@ ${chalk.bold("Options:")}
   --no-prompt-templates, -np     Disable prompt template discovery and loading
   --theme <path>                 Load a theme file or directory (can be used multiple times)
   --no-themes                    Disable theme discovery and loading
+  --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
@@ -224,7 +245,7 @@ ${chalk.bold("Options:")}
   --help, -h                     Show this help
   --version, -v                  Show version number
 
-Extensions can register additional flags (e.g., --plan from plan-mode extension).
+Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
   # Interactive mode
@@ -278,33 +299,40 @@ ${chalk.bold("Environment Variables:")}
   ANTHROPIC_OAUTH_TOKEN            - Anthropic OAuth token (alternative to API key)
   OPENAI_API_KEY                   - OpenAI GPT API key
   AZURE_OPENAI_API_KEY             - Azure OpenAI API key
-  AZURE_OPENAI_BASE_URL            - Azure OpenAI base URL (https://{resource}.openai.azure.com/openai/v1)
+  AZURE_OPENAI_BASE_URL            - Azure OpenAI/Cognitive Services base URL (e.g. https://{resource}.openai.azure.com)
   AZURE_OPENAI_RESOURCE_NAME       - Azure OpenAI resource name (alternative to base URL)
   AZURE_OPENAI_API_VERSION         - Azure OpenAI API version (default: v1)
   AZURE_OPENAI_DEPLOYMENT_NAME_MAP - Azure OpenAI model=deployment map (comma-separated)
+  DEEPSEEK_API_KEY                 - DeepSeek API key
   GEMINI_API_KEY                   - Google Gemini API key
   GROQ_API_KEY                     - Groq API key
   CEREBRAS_API_KEY                 - Cerebras API key
   XAI_API_KEY                      - xAI Grok API key
+  FIREWORKS_API_KEY                - Fireworks API key
   OPENROUTER_API_KEY               - OpenRouter API key
   AI_GATEWAY_API_KEY               - Vercel AI Gateway API key
   ZAI_API_KEY                      - ZAI API key
   MISTRAL_API_KEY                  - Mistral API key
   MINIMAX_API_KEY                  - MiniMax API key
+  MOONSHOT_API_KEY                 - Moonshot AI API key
   OPENCODE_API_KEY                 - OpenCode Zen/OpenCode Go API key
   KIMI_API_KEY                     - Kimi For Coding API key
+  CLOUDFLARE_API_KEY               - Cloudflare API token (Workers AI and AI Gateway)
+  CLOUDFLARE_ACCOUNT_ID            - Cloudflare account id (required for both)
+  CLOUDFLARE_GATEWAY_ID            - Cloudflare AI Gateway slug (required for AI Gateway)
   AWS_PROFILE                      - AWS profile for Amazon Bedrock
   AWS_ACCESS_KEY_ID                - AWS access key for Amazon Bedrock
   AWS_SECRET_ACCESS_KEY            - AWS secret key for Amazon Bedrock
   AWS_BEARER_TOKEN_BEDROCK         - Bedrock API key (bearer token)
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
-  ${ENV_AGENT_DIR.padEnd(32)} - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
+  ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
+  ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
-  PI_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
 
-${chalk.bold("Available Tools (default: read, bash, edit, write):")}
+${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents
   bash   - Execute bash commands
   edit   - Edit files with find/replace

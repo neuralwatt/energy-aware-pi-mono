@@ -92,6 +92,7 @@ export class RpcClient {
 		// Collect stderr for debugging
 		this.process.stderr?.on("data", (data) => {
 			this.stderr += data.toString();
+			process.stderr.write(data);
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -338,6 +339,15 @@ export class RpcClient {
 	 */
 	async fork(entryId: string): Promise<{ text: string; cancelled: boolean }> {
 		const response = await this.send({ type: "fork", entryId });
+		return this.getData(response);
+	}
+
+	/**
+	 * Clone the current active branch into a new session.
+	 * @returns Object with `cancelled: true` if an extension cancelled the clone
+	 */
+	async clone(): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "clone" });
 		return this.getData(response);
 	}
 

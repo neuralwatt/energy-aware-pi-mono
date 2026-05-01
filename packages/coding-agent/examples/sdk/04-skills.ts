@@ -5,7 +5,14 @@
  * Discover, filter, merge, or replace them.
  */
 
-import { createAgentSession, DefaultResourceLoader, SessionManager, type Skill } from "@mariozechner/pi-coding-agent";
+import {
+	createAgentSession,
+	createSyntheticSourceInfo,
+	DefaultResourceLoader,
+	getAgentDir,
+	SessionManager,
+	type Skill,
+} from "@mariozechner/pi-coding-agent";
 
 // Or define custom skills inline
 const customSkill: Skill = {
@@ -13,11 +20,13 @@ const customSkill: Skill = {
 	description: "Custom project instructions",
 	filePath: "/virtual/SKILL.md",
 	baseDir: "/virtual",
-	source: "path",
+	sourceInfo: createSyntheticSourceInfo("/virtual/SKILL.md", { source: "sdk" }),
 	disableModelInvocation: false,
 };
 
 const loader = new DefaultResourceLoader({
+	cwd: process.cwd(),
+	agentDir: getAgentDir(),
 	skillsOverride: (current) => {
 		const filteredSkills = current.skills.filter((s) => s.name.includes("browser") || s.name.includes("search"));
 		return {

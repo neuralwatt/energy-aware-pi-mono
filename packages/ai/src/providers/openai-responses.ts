@@ -8,12 +8,15 @@ import type {
 	CacheRetention,
 	Context,
 	Model,
+	OpenAIResponsesCompat,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
 	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { headersToRecord } from "../utils/headers.js";
+import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
@@ -34,18 +37,18 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 	return "short";
 }
 
-/**
- * Get prompt cache retention based on cacheRetention and base URL.
- * Only applies to direct OpenAI API calls (api.openai.com).
- */
-function getPromptCacheRetention(baseUrl: string, cacheRetention: CacheRetention): "24h" | undefined {
-	if (cacheRetention !== "long") {
-		return undefined;
-	}
-	if (baseUrl.includes("api.openai.com")) {
-		return "24h";
-	}
-	return undefined;
+function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
+	return {
+		sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
+		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+	};
+}
+
+function getPromptCacheRetention(
+	compat: Required<OpenAIResponsesCompat>,
+	cacheRetention: CacheRetention,
+): "24h" | undefined {
+	return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
 // OpenAI Responses-specific options
@@ -88,21 +91,26 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 		try {
 			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const client = createClient(model, context, apiKey, options?.headers);
+			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as ResponseCreateParamsStreaming;
 			}
-			const openaiStream = await client.responses.create(
-				params,
-				options?.signal ? { signal: options.signal } : undefined,
-			);
+			const requestOptions = {
+				...(options?.signal ? { signal: options.signal } : {}),
+				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+			};
+			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
+			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
-				applyServiceTierPricing,
+				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
 			});
 
 			if (options?.signal?.aborted) {
@@ -116,7 +124,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as { index?: number }).index;
+			for (const block of output.content) {
+				delete (block as { index?: number }).index;
+				// partialJson is only a streaming scratch buffer; never persist it.
+				delete (block as { partialJson?: string }).partialJson;
+			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -151,6 +163,7 @@ function createClient(
 	context: Context,
 	apiKey?: string,
 	optionsHeaders?: Record<string, string>,
+	sessionId?: string,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -161,6 +174,7 @@ function createClient(
 		apiKey = process.env.OPENAI_API_KEY;
 	}
 
+	const compat = getCompat(model);
 	const headers = { ...model.headers };
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
@@ -171,16 +185,32 @@ function createClient(
 		Object.assign(headers, copilotHeaders);
 	}
 
+	if (sessionId) {
+		if (compat.sendSessionIdHeader) {
+			headers.session_id = sessionId;
+		}
+		headers["x-client-request-id"] = sessionId;
+	}
+
 	// Merge options headers last so they can override defaults
 	if (optionsHeaders) {
 		Object.assign(headers, optionsHeaders);
 	}
 
+	const defaultHeaders =
+		model.provider === "cloudflare-ai-gateway"
+			? {
+					...headers,
+					Authorization: headers.Authorization ?? null,
+					"cf-aig-authorization": `Bearer ${apiKey}`,
+				}
+			: headers;
+
 	return new OpenAI({
 		apiKey,
-		baseURL: model.baseUrl,
+		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
-		defaultHeaders: headers,
+		defaultHeaders,
 	});
 }
 
@@ -188,12 +218,13 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+	const compat = getCompat(model);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
 		input: messages,
 		stream: true,
 		prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
-		prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+		prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
 		store: false,
 	};
 
@@ -209,7 +240,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.service_tier = options.serviceTier;
 	}
 
-	if (context.tools) {
+	if (context.tools && context.tools.length > 0) {
 		params.tools = convertResponsesTools(context.tools);
 	}
 
@@ -220,38 +251,34 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];
-		} else {
-			if (model.name.startsWith("gpt-5")) {
-				// Jesus Christ, see https://community.openai.com/t/need-reasoning-false-option-for-gpt-5/1351588/7
-				messages.push({
-					role: "developer",
-					content: [
-						{
-							type: "input_text",
-							text: "# Juice: 0 !important",
-						},
-					],
-				});
-			}
+		} else if (model.provider !== "github-copilot") {
+			params.reasoning = { effort: "none" };
 		}
 	}
 
 	return params;
 }
 
-function getServiceTierCostMultiplier(serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined): number {
+function getServiceTierCostMultiplier(
+	model: Pick<Model<"openai-responses">, "id">,
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+): number {
 	switch (serviceTier) {
 		case "flex":
 			return 0.5;
 		case "priority":
-			return 2;
+			return model.id === "gpt-5.5" ? 2.5 : 2;
 		default:
 			return 1;
 	}
 }
 
-function applyServiceTierPricing(usage: Usage, serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined) {
-	const multiplier = getServiceTierCostMultiplier(serviceTier);
+function applyServiceTierPricing(
+	usage: Usage,
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	model: Pick<Model<"openai-responses">, "id">,
+) {
+	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
 	if (multiplier === 1) return;
 
 	usage.cost.input *= multiplier;

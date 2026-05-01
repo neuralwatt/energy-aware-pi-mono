@@ -1,6 +1,6 @@
 import { mkdtempSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { expandPath, resolveReadPath, resolveToCwd } from "../src/core/tools/path-utils.js";
 
@@ -32,7 +32,7 @@ describe("path-utils", () => {
 
 		it("should resolve relative paths against cwd", () => {
 			const result = resolveToCwd("relative/file.txt", "/some/cwd");
-			expect(result).toBe("/some/cwd/relative/file.txt");
+			expect(result).toBe(resolve("/some/cwd", "relative/file.txt"));
 		});
 	});
 
@@ -141,6 +141,21 @@ describe("path-utils", () => {
 			const result = resolveReadPath(userName, tempDir);
 
 			// This works because tryMacOSScreenshotPath() handles this case
+			expect(result).toBe(join(tempDir, macosName));
+		});
+
+		it("should handle macOS screenshot lowercase am/pm variant (en_AU locale)", () => {
+			// Some locales like en_AU use lowercase am/pm in screenshot names
+			const macosName = "Screenshot 2024-01-01 at 10.00.00\u202Fam.png"; // U+202F + lowercase
+			const userName = "Screenshot 2024-01-01 at 10.00.00 am.png"; // regular space + lowercase
+
+			// Create file with macOS-style name
+			writeFileSync(join(tempDir, macosName), "content");
+
+			// User provides regular space path
+			const result = resolveReadPath(userName, tempDir);
+
+			// This works because tryMacOSScreenshotPath() uses case-insensitive matching
 			expect(result).toBe(join(tempDir, macosName));
 		});
 	});

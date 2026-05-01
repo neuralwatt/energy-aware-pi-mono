@@ -1,7 +1,8 @@
 # Energy-Aware Pi Monorepo
-This is a hard fork of the [Pi monorepo](https://github.com/badlogic/pi-mono) where we are extending the agent framework to support energy-awareness.  What's energy-awareness? 
-It's essentially making decisions based on the energy & power constraints in your environment.  For example we have extended the
-Pi coding agent to make model routing decisions based on the expected energy/performance tradeoff of that action.  There are many 
+
+This is a hard fork of the [Pi monorepo](https://github.com/badlogic/pi-mono) where we are extending the agent framework to support energy-awareness. What's energy-awareness?
+It's essentially making decisions based on the energy & power constraints in your environment. For example we have extended the
+Pi coding agent to make model routing decisions based on the expected energy/performance tradeoff of that action. There are many
 other examples we've outlined here: [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md).
 
 The actual per-request energy values come from the Neuralwatt AI model platform here: https://portal.neuralwatt.com/
@@ -28,15 +29,15 @@ npm run demo:hn -w packages/benchmarks -- --duration 60 --fast
 ```
 
 # Energy Observability
-The energy data coming back from the supported APIs is useful for billing, dashboards and compliance.  Paired with location information (available from 
+The energy data coming back from the supported APIs is useful for billing, dashboards and compliance. Paired with location information (available from
 info@neuralwatt.com on request) it can also be used for Scope 3 carbon accounting.
 
 # Energy-aware Policy Framework
-We implement a RuntimePolicy interface that anyone can implement to help make intelligent agent decisions.  We provide an energy-aware policy which 
+We implement a RuntimePolicy interface that anyone can implement to help make intelligent agent decisions. We provide an energy-aware policy which
 implements a set of heuristics to make optimal tradeoffs on how models are called and which models are used for various sub-tasks in the agent to maintain
-problem convergence while dramatically reducing the energy required for those tasks.  On task failure we aggressively upgrade the capabilities to larger and
-more capable models as wasting time on requests which aren't converging isn't productive from an energy use point of view.  In the initial demos we've created
-we've found that solution convergence takes roughly the same amount of sub-tasks while using dramatically less energy (in many cases <80%). 
+problem convergence while dramatically reducing the energy required for those tasks. On task failure we aggressively upgrade the capabilities to larger and
+more capable models as wasting time on requests which aren't converging isn't productive from an energy use point of view. In the initial demos we've created
+we've found that solution convergence takes roughly the same amount of sub-tasks while using dramatically less energy (in many cases <80%).
 
 These capabilities are being integrated into OpenClaw — see [OPENCLAW_INTEGRATION.md](OPENCLAW_INTEGRATION.md)
 
@@ -76,6 +77,17 @@ const { session } = await createAgentSession({
 
 See [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md) for the full implementation reference.
 
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| **[@mariozechner/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
+| **[@mariozechner/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[@mariozechner/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
+| **[@mariozechner/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
+| **[@mariozechner/pi-web-ui](packages/web-ui)** | Web components for AI chat interfaces |
+| **[@mariozechner/pi-benchmarks](packages/benchmarks)** | Energy-aware benchmark runner and demos (fork-only) |
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
@@ -87,7 +99,7 @@ npm install          # Install all dependencies
 npm run build        # Build all packages
 npm run check        # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
-./pi-test.sh         # Run pi from sources (must be run from repo root)
+./pi-test.sh         # Run pi from sources (can be run from any directory)
 ```
 
 > **Note:** `npm run check` requires `npm run build` to be run first. The web-ui package uses `tsc` which needs compiled `.d.ts` files from dependencies.

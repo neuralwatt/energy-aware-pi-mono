@@ -7,17 +7,16 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
 	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
-	resolveApiKey("google-gemini-cli"),
-	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [anthropicOAuthToken, githubCopilotToken, openaiCodexToken] = oauthTokens;
 
 async function testTokensOnAbort<TApi extends Api>(llm: Model<TApi>, options: StreamOptionsWithExtras = {}) {
 	const context: Context = {
@@ -50,32 +49,34 @@ async function testTokensOnAbort<TApi extends Api>(llm: Model<TApi>, options: St
 
 	expect(msg.stopReason).toBe("aborted");
 
-	// OpenAI providers, OpenAI Codex, Gemini CLI, zai, Amazon Bedrock, and the GPT-OSS model on Antigravity only send usage in the final chunk,
+	// OpenAI providers, OpenAI Codex, zai, and Amazon Bedrock only send usage in the final chunk,
 	// so when aborted they have no token stats. Anthropic and Google send usage information early in the stream.
-	// MiniMax reports input tokens but not output tokens when aborted.
+	// MiniMax and Kimi report input tokens but not output tokens differently on aborted requests.
 	if (
 		llm.api === "openai-completions" ||
 		llm.api === "mistral-conversations" ||
 		llm.api === "openai-responses" ||
 		llm.api === "azure-openai-responses" ||
 		llm.api === "openai-codex-responses" ||
-		llm.provider === "google-gemini-cli" ||
 		llm.provider === "zai" ||
 		llm.provider === "amazon-bedrock" ||
-		llm.provider === "vercel-ai-gateway" ||
-		(llm.provider === "google-antigravity" && llm.id.includes("gpt-oss"))
+		llm.provider === "vercel-ai-gateway"
 	) {
 		expect(msg.usage.input).toBe(0);
 		expect(msg.usage.output).toBe(0);
 	} else if (llm.provider === "minimax") {
-		// MiniMax reports input tokens early but output tokens only in final chunk
+		// MiniMax M2.7 does not report token usage for aborted requests.
+		expect(msg.usage.input).toBe(0);
+		expect(msg.usage.output).toBe(0);
+	} else if (llm.provider === "kimi-coding") {
+		// Kimi reports input tokens early but output tokens only in the final chunk.
 		expect(msg.usage.input).toBeGreaterThan(0);
 		expect(msg.usage.output).toBe(0);
 	} else {
 		expect(msg.usage.input).toBeGreaterThan(0);
 		expect(msg.usage.output).toBeGreaterThan(0);
 
-		// Some providers (Antigravity, Copilot) have zero cost rates
+		// Some providers (Copilot) have zero cost rates
 		if (llm.cost.input > 0) {
 			expect(msg.usage.cost.input).toBeGreaterThan(0);
 			expect(msg.usage.cost.total).toBeGreaterThan(0);
@@ -106,10 +107,10 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Responses Provider", () => {
-		const llm = getModel("openai", "gpt-5-mini");
+		const llm = getModel("openai", "gpt-5.4-mini");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
-			await testTokensOnAbort(llm);
+			await testTokensOnAbort(llm, { reasoningEffort: "low" });
 		});
 	});
 
@@ -124,7 +125,7 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider", () => {
-		const llm = getModel("anthropic", "claude-3-5-haiku-20241022");
+		const llm = getModel("anthropic", "claude-sonnet-4-6");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);
@@ -148,7 +149,23 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.CEREBRAS_API_KEY)("Cerebras Provider", () => {
-		const llm = getModel("cerebras", "gpt-oss-120b");
+		const llm = getModel("cerebras", "qwen-3-235b-a22b-instruct-2507");
+
+		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
+			await testTokensOnAbort(llm);
+		});
+	});
+
+	describe.skipIf(!hasCloudflareWorkersAICredentials())("Cloudflare Workers AI Provider", () => {
+		const llm = getModel("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.6");
+
+		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
+			await testTokensOnAbort(llm);
+		});
+	});
+
+	describe.skipIf(!hasCloudflareAiGatewayCredentials())("Cloudflare AI Gateway Provider", () => {
+		const llm = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);
@@ -164,7 +181,7 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider", () => {
-		const llm = getModel("zai", "glm-4.5-flash");
+		const llm = getModel("zai", "glm-4.5-air");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);
@@ -180,7 +197,7 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.MINIMAX_API_KEY)("MiniMax Provider", () => {
-		const llm = getModel("minimax", "MiniMax-M2.1");
+		const llm = getModel("minimax", "MiniMax-M2.7");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);
@@ -188,7 +205,7 @@ describe("Token Statistics on Abort", () => {
 	});
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding Provider", () => {
-		const llm = getModel("kimi-coding", "kimi-k2-thinking");
+		const llm = getModel("kimi-coding", "kimi-for-coding");
 
 		it("should include token stats when aborted mid-stream", { retry: 3, timeout: 30000 }, async () => {
 			await testTokensOnAbort(llm);
@@ -208,7 +225,7 @@ describe("Token Statistics on Abort", () => {
 	// =========================================================================
 
 	describe("Anthropic OAuth Provider", () => {
-		const llm = getModel("anthropic", "claude-3-5-haiku-20241022");
+		const llm = getModel("anthropic", "claude-sonnet-4-6");
 
 		it.skipIf(!anthropicOAuthToken)(
 			"should include token stats when aborted mid-stream",
@@ -235,46 +252,6 @@ describe("Token Statistics on Abort", () => {
 			async () => {
 				const llm = getModel("github-copilot", "claude-sonnet-4");
 				await testTokensOnAbort(llm, { apiKey: githubCopilotToken });
-			},
-		);
-	});
-
-	describe("Google Gemini CLI Provider", () => {
-		it.skipIf(!geminiCliToken)(
-			"gemini-2.5-flash - should include token stats when aborted mid-stream",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				const llm = getModel("google-gemini-cli", "gemini-2.5-flash");
-				await testTokensOnAbort(llm, { apiKey: geminiCliToken });
-			},
-		);
-	});
-
-	describe("Google Antigravity Provider", () => {
-		it.skipIf(!antigravityToken)(
-			"gemini-3-flash - should include token stats when aborted mid-stream",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				const llm = getModel("google-antigravity", "gemini-3-flash");
-				await testTokensOnAbort(llm, { apiKey: antigravityToken });
-			},
-		);
-
-		it.skipIf(!antigravityToken)(
-			"claude-sonnet-4-5 - should include token stats when aborted mid-stream",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				const llm = getModel("google-antigravity", "claude-sonnet-4-5");
-				await testTokensOnAbort(llm, { apiKey: antigravityToken });
-			},
-		);
-
-		it.skipIf(!antigravityToken)(
-			"gpt-oss-120b-medium - should include token stats when aborted mid-stream",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				const llm = getModel("google-antigravity", "gpt-oss-120b-medium");
-				await testTokensOnAbort(llm, { apiKey: antigravityToken });
 			},
 		);
 	});

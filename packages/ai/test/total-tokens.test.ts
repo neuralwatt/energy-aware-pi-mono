@@ -21,17 +21,16 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
 	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
-	resolveApiKey("google-gemini-cli"),
-	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [anthropicOAuthToken, githubCopilotToken, openaiCodexToken] = oauthTokens;
 
 // Generate a long system prompt to trigger caching (>2k bytes for most providers)
 const LONG_SYSTEM_PROMPT = `You are a helpful assistant. Be concise in your responses.
@@ -106,10 +105,10 @@ describe("totalTokens field", () => {
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic (API Key)", () => {
 		it(
-			"claude-3-5-haiku - should return totalTokens equal to sum of components",
+			"claude-sonnet-4-5 - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("anthropic", "claude-3-5-haiku-20241022");
+				const llm = getModel("anthropic", "claude-sonnet-4-5");
 
 				console.log(`\nAnthropic / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.ANTHROPIC_API_KEY });
@@ -132,7 +131,7 @@ describe("totalTokens field", () => {
 			"claude-sonnet-4 - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("anthropic", "claude-sonnet-4-20250514");
+				const llm = getModel("anthropic", "claude-sonnet-4-6");
 
 				console.log(`\nAnthropic OAuth / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: anthropicOAuthToken });
@@ -307,6 +306,56 @@ describe("totalTokens field", () => {
 	});
 
 	// =========================================================================
+	// Cloudflare Workers AI
+	// =========================================================================
+
+	describe.skipIf(!hasCloudflareWorkersAICredentials())("Cloudflare Workers AI", () => {
+		it(
+			"@cf/moonshotai/kimi-k2.6 - should return totalTokens equal to sum of components",
+			{ retry: 3, timeout: 60000 },
+			async () => {
+				const llm = getModel("cloudflare-workers-ai", "@cf/moonshotai/kimi-k2.6");
+
+				console.log(`\nCloudflare Workers AI / ${llm.id}:`);
+				const { first, second } = await testTotalTokensWithCache(llm, {
+					apiKey: process.env.CLOUDFLARE_API_KEY,
+				});
+
+				logUsage("First request", first);
+				logUsage("Second request", second);
+
+				assertTotalTokensEqualsComponents(first);
+				assertTotalTokensEqualsComponents(second);
+			},
+		);
+	});
+
+	// =========================================================================
+	// Cloudflare AI Gateway
+	// =========================================================================
+
+	describe.skipIf(!hasCloudflareAiGatewayCredentials())("Cloudflare AI Gateway", () => {
+		it(
+			"workers-ai/@cf/moonshotai/kimi-k2.6 - should return totalTokens equal to sum of components",
+			{ retry: 3, timeout: 60000 },
+			async () => {
+				const llm = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6");
+
+				console.log(`\nCloudflare AI Gateway / ${llm.id}:`);
+				const { first, second } = await testTotalTokensWithCache(llm, {
+					apiKey: process.env.CLOUDFLARE_API_KEY,
+				});
+
+				logUsage("First request", first);
+				logUsage("Second request", second);
+
+				assertTotalTokensEqualsComponents(first);
+				assertTotalTokensEqualsComponents(second);
+			},
+		);
+	});
+
+	// =========================================================================
 	// Hugging Face
 	// =========================================================================
 
@@ -331,10 +380,10 @@ describe("totalTokens field", () => {
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("z.ai", () => {
 		it(
-			"glm-4.5-flash - should return totalTokens equal to sum of components",
+			"glm-4.5-air - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("zai", "glm-4.5-flash");
+				const llm = getModel("zai", "glm-4.5-air");
 
 				console.log(`\nz.ai / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.ZAI_API_KEY });
@@ -377,10 +426,10 @@ describe("totalTokens field", () => {
 
 	describe.skipIf(!process.env.MINIMAX_API_KEY)("MiniMax", () => {
 		it(
-			"MiniMax-M2.1 - should return totalTokens equal to sum of components",
+			"MiniMax-M2.7 - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("minimax", "MiniMax-M2.1");
+				const llm = getModel("minimax", "MiniMax-M2.7");
 
 				console.log(`\nMiniMax / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.MINIMAX_API_KEY });
@@ -514,10 +563,10 @@ describe("totalTokens field", () => {
 		);
 
 		it(
-			"meta-llama/llama-4-maverick - should return totalTokens equal to sum of components",
+			"meta-llama/llama-4-scout - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("openrouter", "meta-llama/llama-4-maverick");
+				const llm = getModel("openrouter", "meta-llama/llama-4-scout");
 
 				console.log(`\nOpenRouter / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.OPENROUTER_API_KEY });
@@ -572,84 +621,10 @@ describe("totalTokens field", () => {
 	});
 
 	// =========================================================================
-	// Google Gemini CLI (OAuth)
 	// =========================================================================
 
-	describe("Google Gemini CLI (OAuth)", () => {
-		it.skipIf(!geminiCliToken)(
-			"gemini-2.5-flash - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("google-gemini-cli", "gemini-2.5-flash");
-
-				console.log(`\nGoogle Gemini CLI / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: geminiCliToken });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
-
 	// =========================================================================
-	// Google Antigravity (OAuth)
 	// =========================================================================
-
-	describe("Google Antigravity (OAuth)", () => {
-		it.skipIf(!antigravityToken)(
-			"gemini-3-flash - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("google-antigravity", "gemini-3-flash");
-
-				console.log(`\nGoogle Antigravity / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: antigravityToken });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-
-		it.skipIf(!antigravityToken)(
-			"claude-sonnet-4-5 - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("google-antigravity", "claude-sonnet-4-5");
-
-				console.log(`\nGoogle Antigravity / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: antigravityToken });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-
-		it.skipIf(!antigravityToken)(
-			"gpt-oss-120b-medium - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("google-antigravity", "gpt-oss-120b-medium");
-
-				console.log(`\nGoogle Antigravity / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: antigravityToken });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-			},
-		);
-	});
 
 	describe.skipIf(!hasBedrockCredentials())("Amazon Bedrock", () => {
 		it(

@@ -1,16 +1,46 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultPackageManager, type ProgressEvent, type ResolvedResource } from "../src/core/package-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
-// Helper to check if a resource is enabled
-const isEnabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" | "includes" = "endsWith") =>
-	matchFn === "endsWith" ? r.path.endsWith(pathMatch) && r.enabled : r.path.includes(pathMatch) && r.enabled;
+function normalizeForMatch(value: string): string {
+	return value.replace(/\\/g, "/");
+}
 
-const isDisabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" | "includes" = "endsWith") =>
-	matchFn === "endsWith" ? r.path.endsWith(pathMatch) && !r.enabled : r.path.includes(pathMatch) && !r.enabled;
+function pathEndsWith(actualPath: string, suffix: string): boolean {
+	return normalizeForMatch(actualPath).endsWith(normalizeForMatch(suffix));
+}
+
+class MockSpawnedProcess extends EventEmitter {
+	stdout = new PassThrough();
+	stderr = new PassThrough();
+
+	kill(): boolean {
+		this.emit("close", null, "SIGTERM");
+		return true;
+	}
+}
+
+// Helper to check if a resource is enabled
+const isEnabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" | "includes" = "endsWith") => {
+	const normalizedPath = normalizeForMatch(r.path);
+	const normalizedMatch = normalizeForMatch(pathMatch);
+	return matchFn === "endsWith"
+		? normalizedPath.endsWith(normalizedMatch) && r.enabled
+		: normalizedPath.includes(normalizedMatch) && r.enabled;
+};
+
+const isDisabled = (r: ResolvedResource, pathMatch: string, matchFn: "endsWith" | "includes" = "endsWith") => {
+	const normalizedPath = normalizeForMatch(r.path);
+	const normalizedMatch = normalizeForMatch(pathMatch);
+	return matchFn === "endsWith"
+		? normalizedPath.endsWith(normalizedMatch) && !r.enabled
+		: normalizedPath.includes(normalizedMatch) && !r.enabled;
+};
 
 describe("DefaultPackageManager", () => {
 	let tempDir: string;
@@ -88,6 +118,22 @@ Content`,
 			expect(result.skills.some((r) => r.path === skillFile && r.enabled)).toBe(true);
 		});
 
+		it("should auto-discover root markdown skills from .pi skill dirs", async () => {
+			const skillFile = join(agentDir, "skills", "single-file.md");
+			mkdirSync(join(agentDir, "skills"), { recursive: true });
+			writeFileSync(
+				skillFile,
+				`---
+name: single-file
+description: A root markdown skill
+---
+Content`,
+			);
+
+			const result = await packageManager.resolve();
+			expect(result.skills.some((r) => r.path === skillFile && r.enabled)).toBe(true);
+		});
+
 		it("should resolve project paths relative to .pi", async () => {
 			const extDir = join(tempDir, ".pi", "extensions");
 			mkdirSync(extDir, { recursive: true });
@@ -110,6 +156,63 @@ Content`,
 
 			const result = await packageManager.resolve();
 			expect(result.prompts.some((r) => r.path === promptPath && !r.enabled)).toBe(true);
+		});
+
+		it("should resolve symlinked user and project resources once", async () => {
+			const sharedDir = join(tempDir, "shared-resources");
+			const sharedExtensionsDir = join(sharedDir, "extensions");
+			const sharedSkillsDir = join(sharedDir, "skills");
+			const sharedPromptsDir = join(sharedDir, "prompts");
+			const sharedThemesDir = join(sharedDir, "themes");
+			mkdirSync(sharedExtensionsDir, { recursive: true });
+			mkdirSync(sharedSkillsDir, { recursive: true });
+			mkdirSync(sharedPromptsDir, { recursive: true });
+			mkdirSync(sharedThemesDir, { recursive: true });
+
+			writeFileSync(join(sharedExtensionsDir, "shared.ts"), "export default function() {}");
+			mkdirSync(join(sharedSkillsDir, "shared-skill"), { recursive: true });
+			writeFileSync(
+				join(sharedSkillsDir, "shared-skill", "SKILL.md"),
+				`---
+name: shared-skill
+description: Shared skill
+---
+Content`,
+			);
+			writeFileSync(join(sharedPromptsDir, "shared.md"), "Shared prompt");
+			writeFileSync(join(sharedThemesDir, "shared.json"), JSON.stringify({ name: "shared-theme" }));
+
+			mkdirSync(join(agentDir), { recursive: true });
+			mkdirSync(join(tempDir, ".pi"), { recursive: true });
+			symlinkSync(sharedExtensionsDir, join(agentDir, "extensions"), "dir");
+			symlinkSync(sharedSkillsDir, join(agentDir, "skills"), "dir");
+			symlinkSync(sharedPromptsDir, join(agentDir, "prompts"), "dir");
+			symlinkSync(sharedThemesDir, join(agentDir, "themes"), "dir");
+			symlinkSync(sharedExtensionsDir, join(tempDir, ".pi", "extensions"), "dir");
+			symlinkSync(sharedSkillsDir, join(tempDir, ".pi", "skills"), "dir");
+			symlinkSync(sharedPromptsDir, join(tempDir, ".pi", "prompts"), "dir");
+			symlinkSync(sharedThemesDir, join(tempDir, ".pi", "themes"), "dir");
+
+			const result = await packageManager.resolve();
+
+			expect({
+				extensions: result.extensions.length,
+				skills: result.skills.length,
+				prompts: result.prompts.length,
+				themes: result.themes.length,
+			}).toEqual({
+				extensions: 1,
+				skills: 1,
+				prompts: 1,
+				themes: 1,
+			});
+
+			// Project auto-discovered has higher precedence than user auto-discovered,
+			// so the surviving entry should be scoped to project.
+			expect(result.extensions[0].metadata.scope).toBe("project");
+			expect(result.skills[0].metadata.scope).toBe("project");
+			expect(result.prompts[0].metadata.scope).toBe("project");
+			expect(result.themes[0].metadata.scope).toBe("project");
 		});
 
 		it("should auto-discover project prompts with overrides", async () => {
@@ -155,7 +258,7 @@ Content`,
 			);
 
 			// Should NOT find helper.ts (not declared in manifest)
-			expect(result.extensions.some((r) => r.path.endsWith("helper.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "helper.ts"))).toBe(false);
 		});
 	});
 
@@ -214,6 +317,26 @@ Content`,
 			expect(result.skills.some((r) => r.path === middleSkill && r.enabled)).toBe(true);
 		});
 
+		it("should ignore root markdown files in .agents/skills", async () => {
+			const agentsSkillsDir = join(tempDir, ".agents", "skills");
+			mkdirSync(join(agentsSkillsDir, "nested-skill"), { recursive: true });
+			const rootSkill = join(agentsSkillsDir, "root-file.md");
+			const nestedSkill = join(agentsSkillsDir, "nested-skill", "SKILL.md");
+			writeFileSync(rootSkill, "---\nname: root-file\ndescription: Root markdown file\n---\n");
+			writeFileSync(nestedSkill, "---\nname: nested-skill\ndescription: Nested skill\n---\n");
+
+			const pm = new DefaultPackageManager({
+				cwd: join(tempDir, "work"),
+				agentDir,
+				settingsManager,
+			});
+			mkdirSync(join(tempDir, "work"), { recursive: true });
+
+			const result = await pm.resolve();
+			expect(result.skills.some((r) => r.path === rootSkill)).toBe(false);
+			expect(result.skills.some((r) => r.path === nestedSkill && r.enabled)).toBe(true);
+		});
+
 		it("should keep ~/.agents/skills user-scoped when cwd is under home in a non-git directory", async () => {
 			const previousHome = process.env.HOME;
 			process.env.HOME = tempDir;
@@ -241,6 +364,35 @@ Content`,
 				expect(matchingSkills[0]?.enabled).toBe(true);
 				expect(matchingSkills[0]?.metadata.scope).toBe("user");
 				expect(matchingSkills[0]?.metadata.source).toBe("auto");
+			} finally {
+				if (previousHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = previousHome;
+				}
+			}
+		});
+
+		it("should dedupe user skill entries when ~/.pi/agent/skills is a symlink to ~/.agents/skills", async () => {
+			const previousHome = process.env.HOME;
+			process.env.HOME = tempDir;
+
+			try {
+				const agentSkillsDir = join(agentDir, "skills");
+				const agentsSkillsDir = join(tempDir, ".agents", "skills");
+				mkdirSync(agentsSkillsDir, { recursive: true });
+				// Use junction on Windows to avoid EPERM when symlink privileges are unavailable.
+				const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+				symlinkSync(agentsSkillsDir, agentSkillsDir, directoryLinkType);
+
+				const skillPath = join(agentsSkillsDir, "foo", "SKILL.md");
+				mkdirSync(join(agentsSkillsDir, "foo"), { recursive: true });
+				writeFileSync(skillPath, "---\nname: foo\ndescription: foo\n---\n");
+
+				const result = await packageManager.resolve();
+				const fooSkills = result.skills.filter((r) => pathEndsWith(r.path, "foo/SKILL.md"));
+
+				expect(fooSkills).toHaveLength(1);
 			} finally {
 				if (previousHome === undefined) {
 					delete process.env.HOME;
@@ -331,8 +483,21 @@ Content`,
 			writeFileSync(join(pkgDir, "themes", "dark.json"), "{}");
 
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
-			expect(result.extensions.some((r) => r.path.endsWith("main.ts") && r.enabled)).toBe(true);
-			expect(result.themes.some((r) => r.path.endsWith("dark.json") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "main.ts") && r.enabled)).toBe(true);
+			expect(result.themes.some((r) => pathEndsWith(r.path, "dark.json") && r.enabled)).toBe(true);
+		});
+
+		it("should stop recursing when a package skill directory contains SKILL.md", async () => {
+			const pkgDir = join(tempDir, "skill-root-pkg");
+			mkdirSync(join(pkgDir, "skills", "root-skill", "nested-skill"), { recursive: true });
+			const rootSkill = join(pkgDir, "skills", "root-skill", "SKILL.md");
+			const nestedSkill = join(pkgDir, "skills", "root-skill", "nested-skill", "SKILL.md");
+			writeFileSync(rootSkill, "---\nname: root-skill\ndescription: Root skill\n---\n");
+			writeFileSync(nestedSkill, "---\nname: nested-skill\ndescription: Nested skill\n---\n");
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			expect(result.skills.some((r) => r.path === rootSkill && r.enabled)).toBe(true);
+			expect(result.skills.some((r) => r.path === nestedSkill)).toBe(false);
 		});
 	});
 
@@ -349,6 +514,192 @@ Content`,
 
 			// For now just verify no errors - npm/git would trigger actual events
 			expect(events.length).toBe(0);
+		});
+	});
+
+	describe("windows command spawning", () => {
+		it("should avoid the shell for git so Windows paths with spaces stay single arguments", () => {
+			vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+			const managerWithInternals = packageManager as unknown as {
+				shouldUseWindowsShell(command: string): boolean;
+			};
+
+			expect(managerWithInternals.shouldUseWindowsShell("git")).toBe(false);
+			expect(managerWithInternals.shouldUseWindowsShell("npm")).toBe(true);
+			expect(managerWithInternals.shouldUseWindowsShell("pnpm")).toBe(true);
+			expect(managerWithInternals.shouldUseWindowsShell("C:/Program Files/nodejs/npm.cmd")).toBe(true);
+		});
+	});
+
+	describe("npmCommand", () => {
+		it("should use npmCommand argv for npm installs", async () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["mise", "exec", "node@20", "--", "npm"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.install("npm:@scope/pkg");
+
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"mise",
+				["exec", "node@20", "--", "npm", "install", "-g", "@scope/pkg"],
+				undefined,
+			);
+		});
+
+		it("should install git package dependencies with --omit=dev", async () => {
+			const source = "git:github.com/user/repo";
+			const targetDir = join(agentDir, "git", "github.com", "user", "repo");
+			const runCommandSpy = vi
+				.spyOn(packageManager as any, "runCommand")
+				.mockImplementation(async (...callArgs: unknown[]) => {
+					const [command, args] = callArgs as [string, string[]];
+					if (command === "git" && args[0] === "clone") {
+						mkdirSync(targetDir, { recursive: true });
+						writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "repo", version: "1.0.0" }));
+					}
+				});
+
+			await packageManager.install(source);
+
+			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
+		});
+
+		it("should use plain install for git package dependencies when npmCommand is configured", async () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["pnpm"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+
+			const source = "git:github.com/user/repo";
+			const targetDir = join(agentDir, "git", "github.com", "user", "repo");
+			const runCommandSpy = vi
+				.spyOn(packageManager as any, "runCommand")
+				.mockImplementation(async (...callArgs: unknown[]) => {
+					const [command, args] = callArgs as [string, string[]];
+					if (command === "git" && args[0] === "clone") {
+						mkdirSync(targetDir, { recursive: true });
+						writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "repo", version: "1.0.0" }));
+					}
+				});
+
+			await packageManager.install(source);
+
+			expect(runCommandSpy).toHaveBeenCalledWith("pnpm", ["install"], { cwd: targetDir });
+		});
+
+		it("should update git package dependencies with --omit=dev", async () => {
+			const source = "git:github.com/user/repo";
+			const targetDir = join(tempDir, ".pi", "git", "github.com", "user", "repo");
+			mkdirSync(targetDir, { recursive: true });
+			writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "repo", version: "1.0.0" }));
+			settingsManager.setProjectPackages([source]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockImplementation(async (...callArgs: unknown[]) => {
+				const [_command, args] = callArgs as [string, string[]];
+				if (args[0] === "rev-parse" && args[1] === "--abbrev-ref" && args[2] === "@{upstream}") {
+					return "origin/main";
+				}
+				if (args[0] === "rev-parse" && args[1] === "@{upstream}") {
+					return "remote-head";
+				}
+				if (args[0] === "rev-parse" && args[1] === "HEAD") {
+					return "local-head";
+				}
+				throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
+			});
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update(source);
+
+			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
+		});
+
+		it("should use plain install through npmCommand argv when updating git package dependencies", async () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["mise", "exec", "node@20", "--", "pnpm"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+
+			const source = "git:github.com/user/repo";
+			const targetDir = join(tempDir, ".pi", "git", "github.com", "user", "repo");
+			mkdirSync(targetDir, { recursive: true });
+			writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "repo", version: "1.0.0" }));
+			settingsManager.setProjectPackages([source]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockImplementation(async (...callArgs: unknown[]) => {
+				const [_command, args] = callArgs as [string, string[]];
+				if (args[0] === "rev-parse" && args[1] === "--abbrev-ref" && args[2] === "@{upstream}") {
+					return "origin/main";
+				}
+				if (args[0] === "rev-parse" && args[1] === "@{upstream}") {
+					return "remote-head";
+				}
+				if (args[0] === "rev-parse" && args[1] === "HEAD") {
+					return "local-head";
+				}
+				throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
+			});
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update(source);
+
+			expect(runCommandSpy).toHaveBeenCalledWith("mise", ["exec", "node@20", "--", "pnpm", "install"], {
+				cwd: targetDir,
+			});
+		});
+
+		it("should use npmCommand argv for npm root lookup and invalidate cached root when npmCommand changes", () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["mise", "exec", "node@20", "--", "npm"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+
+			const root20 = join(tempDir, "node20", "lib", "node_modules");
+			const root22 = join(tempDir, "node22", "lib", "node_modules");
+			mkdirSync(join(root20, "@scope", "pkg"), { recursive: true });
+
+			const runCommandSyncSpy = vi
+				.spyOn(packageManager as any, "runCommandSync")
+				.mockImplementation((...callArgs: unknown[]) => {
+					const [command, args] = callArgs as [string, string[]];
+					if (command !== "mise") {
+						throw new Error(`unexpected command ${command}`);
+					}
+					if (args[1] === "node@20") {
+						return root20;
+					}
+					if (args[1] === "node@22") {
+						return root22;
+					}
+					throw new Error(`unexpected args ${args.join(" ")}`);
+				});
+
+			expect(packageManager.getInstalledPath("npm:@scope/pkg", "user")).toBe(join(root20, "@scope", "pkg"));
+			expect(runCommandSyncSpy).toHaveBeenNthCalledWith(1, "mise", ["exec", "node@20", "--", "npm", "root", "-g"]);
+
+			settingsManager.setNpmCommand(["mise", "exec", "node@22", "--", "npm"]);
+
+			expect(packageManager.getInstalledPath("npm:@scope/pkg", "user")).toBeUndefined();
+			expect(runCommandSyncSpy).toHaveBeenNthCalledWith(2, "mise", ["exec", "node@22", "--", "npm", "root", "-g"]);
 		});
 	});
 
@@ -669,7 +1020,7 @@ Content`,
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 			expect(result.extensions.some((r) => isEnabled(r, "local.ts"))).toBe(true);
 			expect(result.extensions.some((r) => isEnabled(r, "remote.ts"))).toBe(true);
-			expect(result.extensions.some((r) => r.path.endsWith("skip.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "skip.ts"))).toBe(false);
 		});
 
 		it("should support glob patterns in manifest skills", async () => {
@@ -697,6 +1048,33 @@ Content`,
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 			expect(result.skills.some((r) => isEnabled(r, "good-skill", "includes"))).toBe(true);
 			expect(result.skills.some((r) => r.path.includes("bad-skill"))).toBe(false);
+		});
+
+		it("should expand positive glob manifest entries before collecting skills", async () => {
+			const pkgDir = join(tempDir, "skill-manifest-glob-pkg");
+			mkdirSync(join(pkgDir, "plugins/pdf-to-markdown/skills/pdf-to-markdown"), { recursive: true });
+			mkdirSync(join(pkgDir, "plugins/nutrient-dws/skills/document-processor-api"), { recursive: true });
+			writeFileSync(
+				join(pkgDir, "plugins/pdf-to-markdown/skills/pdf-to-markdown", "SKILL.md"),
+				"---\nname: pdf-to-markdown\ndescription: PDF to Markdown\n---\nContent",
+			);
+			writeFileSync(
+				join(pkgDir, "plugins/nutrient-dws/skills/document-processor-api", "SKILL.md"),
+				"---\nname: document-processor-api\ndescription: DWS\n---\nContent",
+			);
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({
+					name: "skill-manifest-glob-pkg",
+					pi: {
+						skills: ["./plugins/*/skills"],
+					},
+				}),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			expect(result.skills.some((r) => isEnabled(r, "pdf-to-markdown", "includes"))).toBe(true);
+			expect(result.skills.some((r) => isEnabled(r, "document-processor-api", "includes"))).toBe(true);
 		});
 	});
 
@@ -736,7 +1114,7 @@ Content`,
 			// bar.ts should be excluded (by user)
 			expect(result.extensions.some((r) => isDisabled(r, "bar.ts"))).toBe(true);
 			// baz.ts should be excluded (by manifest)
-			expect(result.extensions.some((r) => r.path.endsWith("baz.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "baz.ts"))).toBe(false);
 		});
 
 		it("should exclude extensions from package with ! pattern", async () => {
@@ -1132,11 +1510,11 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 
 			// Should find the index.ts and standalone.ts
-			expect(result.extensions.some((r) => r.path.endsWith("subagent/index.ts") && r.enabled)).toBe(true);
-			expect(result.extensions.some((r) => r.path.endsWith("standalone.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "subagent/index.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "standalone.ts") && r.enabled)).toBe(true);
 
 			// Should NOT find agents.ts as a standalone extension
-			expect(result.extensions.some((r) => r.path.endsWith("agents.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "agents.ts"))).toBe(false);
 		});
 
 		it("should respect package.json pi.extensions manifest in subdirectories", async () => {
@@ -1158,10 +1536,10 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 
 			// Should find main.ts declared in manifest
-			expect(result.extensions.some((r) => r.path.endsWith("custom/main.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "custom/main.ts") && r.enabled)).toBe(true);
 
 			// Should NOT find utils.ts (not declared in manifest)
-			expect(result.extensions.some((r) => r.path.endsWith("utils.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "utils.ts"))).toBe(false);
 		});
 
 		it("should handle mixed top-level files and subdirectories", async () => {
@@ -1182,12 +1560,12 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 
 			// Should find simple.ts and complex/index.ts
-			expect(result.extensions.some((r) => r.path.endsWith("simple.ts") && r.enabled)).toBe(true);
-			expect(result.extensions.some((r) => r.path.endsWith("complex/index.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "simple.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "complex/index.ts") && r.enabled)).toBe(true);
 
 			// Should NOT find helper modules
-			expect(result.extensions.some((r) => r.path.endsWith("complex/a.ts"))).toBe(false);
-			expect(result.extensions.some((r) => r.path.endsWith("complex/b.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "complex/a.ts"))).toBe(false);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "complex/b.ts"))).toBe(false);
 
 			// Total should be exactly 2
 			expect(result.extensions.filter((r) => r.enabled).length).toBe(2);
@@ -1207,12 +1585,179 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			const result = await packageManager.resolveExtensionSources([pkgDir]);
 
 			// Should only find the valid top-level extension
-			expect(result.extensions.some((r) => r.path.endsWith("valid.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "valid.ts") && r.enabled)).toBe(true);
 			expect(result.extensions.filter((r) => r.enabled).length).toBe(1);
 		});
 	});
 
 	describe("offline mode and network timeouts", () => {
+		it("should update project npm packages using @latest when newer version is available", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update("npm:example");
+
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"npm",
+				["view", "example", "version", "--json"],
+				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["install", "example@latest", "--prefix", join(tempDir, ".pi", "npm")],
+				undefined,
+			);
+		});
+
+		it("should skip project npm update when installed version matches latest", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.2.3" }));
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.update("npm:example");
+
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"npm",
+				["view", "example", "version", "--json"],
+				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+			);
+			expect(runCommandSpy).not.toHaveBeenCalled();
+		});
+
+		it("should batch npm updates per scope and run git updates in parallel while skipping pinned and current packages", async () => {
+			vi.spyOn(packageManager as any, "getGlobalNpmRoot").mockReturnValue(join(agentDir, "node_modules"));
+
+			const userOldPath = join(agentDir, "node_modules", "user-old");
+			const userCurrentPath = join(agentDir, "node_modules", "user-current");
+			const userUnknownPath = join(agentDir, "node_modules", "user-unknown");
+			const projectOldPath = join(tempDir, ".pi", "npm", "node_modules", "project-old");
+			const projectCurrentPath = join(tempDir, ".pi", "npm", "node_modules", "project-current");
+			const installPaths = [userOldPath, userCurrentPath, userUnknownPath, projectOldPath, projectCurrentPath];
+			for (const installPath of installPaths) {
+				mkdirSync(installPath, { recursive: true });
+			}
+			writeFileSync(join(userOldPath, "package.json"), JSON.stringify({ name: "user-old", version: "1.0.0" }));
+			writeFileSync(
+				join(userCurrentPath, "package.json"),
+				JSON.stringify({ name: "user-current", version: "1.0.0" }),
+			);
+			writeFileSync(
+				join(userUnknownPath, "package.json"),
+				JSON.stringify({ name: "user-unknown", version: "1.0.0" }),
+			);
+			writeFileSync(join(projectOldPath, "package.json"), JSON.stringify({ name: "project-old", version: "1.0.0" }));
+			writeFileSync(
+				join(projectCurrentPath, "package.json"),
+				JSON.stringify({ name: "project-current", version: "1.0.0" }),
+			);
+
+			settingsManager.setPackages([
+				"npm:user-old",
+				"npm:user-current",
+				"npm:user-unknown",
+				"npm:user-pinned@1.0.0",
+				"git:github.com/example/user-repo-a",
+				"git:github.com/example/user-repo-b",
+				"git:github.com/example/user-repo-pinned@v1",
+			]);
+			settingsManager.setProjectPackages([
+				"npm:project-old",
+				"npm:project-current",
+				"npm:project-missing",
+				"git:github.com/example/project-repo-a",
+			]);
+
+			const runCommandCaptureSpy = vi
+				.spyOn(packageManager as any, "runCommandCapture")
+				.mockImplementation(async (...callArgs: unknown[]) => {
+					const [_command, args] = callArgs as [string, string[]];
+					if (args[0] !== "view") {
+						throw new Error(`Unexpected runCommandCapture args: ${args.join(" ")}`);
+					}
+					switch (args[1]) {
+						case "user-old":
+						case "project-old":
+							return '"2.0.0"';
+						case "user-current":
+						case "project-current":
+							return '"1.0.0"';
+						case "user-unknown":
+							throw new Error("registry unavailable");
+						default:
+							throw new Error(`Unexpected package lookup: ${args[1]}`);
+					}
+				});
+
+			let activeNpmUpdates = 0;
+			let maxConcurrentNpmUpdates = 0;
+			const runCommandSpy = vi
+				.spyOn(packageManager as any, "runCommand")
+				.mockImplementation(async (...callArgs: unknown[]) => {
+					const [command, args] = callArgs as [string, string[]];
+					if (command !== "npm") {
+						throw new Error(`Unexpected runCommand call: ${command} ${args.join(" ")}`);
+					}
+					activeNpmUpdates += 1;
+					maxConcurrentNpmUpdates = Math.max(maxConcurrentNpmUpdates, activeNpmUpdates);
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					activeNpmUpdates -= 1;
+				});
+
+			let activeGitUpdates = 0;
+			let maxConcurrentGitUpdates = 0;
+			const updateGitSpy = vi.spyOn(packageManager as any, "updateGit").mockImplementation(async () => {
+				activeGitUpdates += 1;
+				maxConcurrentGitUpdates = Math.max(maxConcurrentGitUpdates, activeGitUpdates);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				activeGitUpdates -= 1;
+			});
+
+			await packageManager.update();
+
+			expect(runCommandCaptureSpy).toHaveBeenCalledTimes(5);
+			expect(runCommandSpy).toHaveBeenCalledTimes(2);
+			expect(runCommandSpy).toHaveBeenNthCalledWith(
+				1,
+				"npm",
+				["install", "-g", "user-old@latest", "user-unknown@latest"],
+				undefined,
+			);
+			expect(runCommandSpy).toHaveBeenNthCalledWith(
+				2,
+				"npm",
+				["install", "project-old@latest", "project-missing@latest", "--prefix", join(tempDir, ".pi", "npm")],
+				undefined,
+			);
+			expect(updateGitSpy).toHaveBeenCalledTimes(3);
+			expect(maxConcurrentNpmUpdates).toBeGreaterThan(1);
+			expect(maxConcurrentGitUpdates).toBeGreaterThan(1);
+		});
+
+		it("should suggest npm source prefixes for update lookups", async () => {
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			await expect(packageManager.update("example")).rejects.toThrow(
+				"No matching package found for example. Did you mean npm:example?",
+			);
+		});
+
+		it("should suggest git source prefixes for update lookups", async () => {
+			settingsManager.setProjectPackages(["git:github.com/example/repo"]);
+
+			await expect(packageManager.update("github.com/example/repo")).rejects.toThrow(
+				"No matching package found for github.com/example/repo. Did you mean git:github.com/example/repo?",
+			);
+		});
+
 		it("should skip installing missing package sources when offline", async () => {
 			process.env.PI_OFFLINE = "1";
 			settingsManager.setProjectPackages(["npm:missing-package", "git:github.com/example/missing-repo"]);
@@ -1237,40 +1782,150 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			const refreshTemporaryGitSourceSpy = vi.spyOn(packageManager as any, "refreshTemporaryGitSource");
 
 			const result = await packageManager.resolveExtensionSources([gitSource], { temporary: true });
-			expect(result.extensions.some((r) => r.path.endsWith("extensions/index.ts") && r.enabled)).toBe(true);
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "extensions/index.ts") && r.enabled)).toBe(true);
 			expect(refreshTemporaryGitSourceSpy).not.toHaveBeenCalled();
 		});
 
-		it("should not call fetch in npmNeedsUpdate when offline", async () => {
-			process.env.PI_OFFLINE = "1";
-			const installedPath = join(tempDir, "installed-package");
-			mkdirSync(installedPath, { recursive: true });
-			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ version: "1.0.0" }));
+		it("should not run npm view during resolve for installed unpinned packages", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(join(installedPath, "extensions"), { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			writeFileSync(join(installedPath, "extensions", "index.ts"), "export default function() {};");
+			settingsManager.setProjectPackages(["npm:example"]);
 
-			const fetchSpy = vi.spyOn(globalThis, "fetch");
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture");
 
-			const needsUpdate = await (packageManager as any).npmNeedsUpdate(
-				{ type: "npm", spec: "example", name: "example", pinned: false },
-				installedPath,
-			);
-
-			expect(needsUpdate).toBe(false);
-			expect(fetchSpy).not.toHaveBeenCalled();
+			const result = await packageManager.resolve();
+			expect(result.extensions.some((r) => pathEndsWith(r.path, "extensions/index.ts") && r.enabled)).toBe(true);
+			expect(runCommandCaptureSpy).not.toHaveBeenCalled();
 		});
 
-		it("should pass an AbortSignal timeout when fetching npm latest version", async () => {
-			const fetchMock = vi.fn().mockResolvedValue({
-				ok: true,
-				json: async () => ({ version: "1.2.3" }),
-			});
-			vi.stubGlobal("fetch", fetchMock);
+		it("should reinstall pinned npm packages when installed version does not match", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			settingsManager.setProjectPackages(["npm:example@2.0.0"]);
+
+			const installParsedSourceSpy = vi
+				.spyOn(packageManager as any, "installParsedSource")
+				.mockResolvedValue(undefined);
+
+			await packageManager.resolve();
+			expect(installParsedSourceSpy).toHaveBeenCalledTimes(1);
+		});
+
+		it("should not check package updates when offline", async () => {
+			process.env.PI_OFFLINE = "1";
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture");
+
+			const updates = await packageManager.checkForAvailableUpdates();
+			expect(updates).toEqual([]);
+			expect(runCommandCaptureSpy).not.toHaveBeenCalled();
+		});
+
+		it("should report updates for installed unpinned npm packages", async () => {
+			const installedPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			settingsManager.setProjectPackages(["npm:example"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
+
+			const updates = await packageManager.checkForAvailableUpdates();
+			expect(updates).toEqual([
+				{
+					source: "npm:example",
+					displayName: "example",
+					type: "npm",
+					scope: "project",
+				},
+			]);
+		});
+
+		it("should skip pinned packages when checking for updates", async () => {
+			const installedNpmPath = join(tempDir, ".pi", "npm", "node_modules", "example");
+			mkdirSync(installedNpmPath, { recursive: true });
+			writeFileSync(join(installedNpmPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			const parsedGitSource = (packageManager as any).parseSource("git:github.com/example/repo@v1");
+			const installedGitPath = (packageManager as any).getGitInstallPath(parsedGitSource, "project") as string;
+			mkdirSync(installedGitPath, { recursive: true });
+
+			settingsManager.setProjectPackages(["npm:example@1.0.0", "git:github.com/example/repo@v1"]);
+
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture");
+			const gitUpdateSpy = vi.spyOn(packageManager as any, "gitHasAvailableUpdate");
+
+			const updates = await packageManager.checkForAvailableUpdates();
+			expect(updates).toEqual([]);
+			expect(runCommandCaptureSpy).not.toHaveBeenCalled();
+			expect(gitUpdateSpy).not.toHaveBeenCalled();
+		});
+
+		it("should use npm view to fetch latest version", async () => {
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
 
 			const latest = await (packageManager as any).getLatestNpmVersion("example");
 			expect(latest).toBe("1.2.3");
-			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(runCommandCaptureSpy).toHaveBeenCalledTimes(1);
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"npm",
+				["view", "example", "version", "--json"],
+				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+			);
+		});
 
-			const [, options] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
-			expect(options?.signal).toBeDefined();
+		it("should use npmCommand argv for npm update checks", async () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["mise", "exec", "node@20", "--", "npm"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.2.3"');
+
+			const latest = await (packageManager as any).getLatestNpmVersion("@scope/pkg");
+			expect(latest).toBe("1.2.3");
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"mise",
+				["exec", "node@20", "--", "npm", "view", "@scope/pkg", "version", "--json"],
+				expect.objectContaining({ cwd: tempDir }),
+			);
+		});
+
+		it("should wait for close before resolving captured stdout", async () => {
+			const managerWithInternals = packageManager as unknown as {
+				spawnCaptureCommand(
+					command: string,
+					args: string[],
+					options?: { cwd?: string; env?: Record<string, string> },
+				): MockSpawnedProcess;
+				runCommandCapture(
+					command: string,
+					args: string[],
+					options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
+				): Promise<string>;
+			};
+			const child = new MockSpawnedProcess();
+			vi.spyOn(managerWithInternals, "spawnCaptureCommand").mockReturnValue(child);
+
+			let settled = false;
+			const capturePromise = managerWithInternals.runCommandCapture("git", ["rev-parse", "HEAD"]).then((value) => {
+				settled = true;
+				return value;
+			});
+
+			child.emit("exit", 0, null);
+			await Promise.resolve();
+			expect(settled).toBe(false);
+
+			child.stdout.write("abc123\n");
+			child.stdout.end();
+			child.emit("close", 0, null);
+
+			await expect(capturePromise).resolves.toBe("abc123");
 		});
 	});
 });

@@ -67,6 +67,8 @@ export interface GenerateBranchSummaryOptions {
 	model: Model<any>;
 	/** API key for the model */
 	apiKey: string;
+	/** Request headers for the model */
+	headers?: Record<string, string>;
 	/** Abort signal for cancellation */
 	signal: AbortSignal;
 	/** Optional custom instructions for summarization */
@@ -162,6 +164,7 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 		case "model_change":
 		case "custom":
 		case "label":
+		case "session_info":
 			return undefined;
 	}
 }
@@ -281,7 +284,7 @@ export async function generateBranchSummary(
 	entries: SessionEntry[],
 	options: GenerateBranchSummaryOptions,
 ): Promise<BranchSummaryResult> {
-	const { model, apiKey, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
 
 	// Token budget = context window minus reserved space for prompt + response
 	const contextWindow = model.contextWindow || 128000;
@@ -321,7 +324,7 @@ export async function generateBranchSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, signal, maxTokens: 2048 },
+		{ apiKey, headers, signal, maxTokens: 2048 },
 	);
 
 	// Check if aborted or errored

@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, test } from "vitest";
+import { setKeybindings } from "@mariozechner/pi-tui";
+import { beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { KeybindingsManager } from "../src/core/keybindings.js";
 import type {
 	ModelChangeEntry,
 	SessionEntry,
@@ -10,6 +12,11 @@ import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
 beforeAll(() => {
 	initTheme("dark");
+});
+
+beforeEach(() => {
+	// Ensure test isolation: keybindings are a global singleton
+	setKeybindings(new KeybindingsManager());
 });
 
 // Helper to create a user message entry
@@ -238,6 +245,36 @@ describe("TreeSelectorComponent", () => {
 			// (since that's what we navigated to via parent traversal)
 			selector.handleInput("\x04"); // Ctrl+D
 			expect(list.getSelectedNode()?.entry.id).toBe("user-2");
+		});
+	});
+
+	describe("label timestamps", () => {
+		test("toggles label timestamps for labeled nodes", () => {
+			const entries = [userMessage("user-1", null, "hello"), assistantMessage("asst-1", "user-1", "hi")];
+			const tree = buildTree(entries);
+			const labelDate = new Date(2026, 2, 28, 14, 32, 0);
+			tree[0]!.label = "checkpoint";
+			tree[0]!.labelTimestamp = labelDate.toISOString();
+
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+			);
+
+			const list = selector.getTreeList();
+			let render = list.render(200).join("\n");
+			expect(render).toContain("[checkpoint]");
+			expect(render).not.toContain("3/28 14:32");
+			expect(render).not.toContain("[+label time]");
+
+			selector.handleInput("T");
+
+			render = list.render(200).join("\n");
+			expect(render).toContain("3/28 14:32");
+			expect(render).toContain("[+label time]");
 		});
 	});
 

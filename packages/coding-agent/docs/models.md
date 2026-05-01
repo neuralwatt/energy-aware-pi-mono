@@ -11,6 +11,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Model Configuration](#model-configuration)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
+- [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
 
 ## Minimal Example
@@ -34,6 +35,32 @@ For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
 ```
 
 The `apiKey` is required but Ollama ignores it, so any value works.
+
+Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so pi sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
+
+You can set `compat` at the provider level to apply to all models, or at the model level to override a specific model. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "gpt-oss:20b",
+          "reasoning": true
+        }
+      ]
+    }
+  }
+}
+```
 
 ## Full Example
 
@@ -63,6 +90,33 @@ Override defaults when you need specific values:
 ```
 
 The file reloads each time you open `/model`. Edit during session; no restart needed.
+
+## Google AI Studio Example
+
+Use `google-generative-ai` with a `baseUrl` to add models from Google AI Studio, including custom Gemma 4 entries:
+
+```json
+{
+  "providers": {
+    "my-google": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "api": "google-generative-ai",
+      "apiKey": "GEMINI_API_KEY",
+      "models": [
+        {
+          "id": "gemma-4-31b-it",
+          "name": "Gemma 4 31B",
+          "input": ["text", "image"],
+          "contextWindow": 262144,
+          "reasoning": true
+        }
+      ]
+    }
+  }
+}
+```
+
+The `baseUrl` is required when adding custom models to the `google-generative-ai` API type.
 
 ## Supported APIs
 
@@ -105,6 +159,12 @@ The `apiKey` and `headers` fields support three formats:
   "apiKey": "sk-..."
   ```
 
+For `models.json`, shell commands are resolved at request time. pi intentionally does not apply built-in TTL, stale reuse, or recovery logic for arbitrary commands. Different commands need different caching and failure strategies, and pi cannot infer the right one.
+
+If your command is slow, expensive, rate-limited, or should keep using a previous value on transient failures, wrap it in your own script or command that implements the caching or TTL behavior you want.
+
+`/model` availability checks use configured auth presence and do not execute shell commands.
+
 ### Custom Headers
 
 ```json
@@ -136,6 +196,7 @@ The `apiKey` and `headers` fields support three formats:
 | `contextWindow` | No | `128000` | Context window size in tokens |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
+| `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
@@ -209,9 +270,46 @@ Behavior notes:
 - You can combine provider-level `baseUrl`/`headers` with `modelOverrides`.
 - If `models` is also defined for a provider, custom models are merged after built-in overrides. A custom model with the same `id` replaces the overridden built-in model entry.
 
+## Anthropic Messages Compatibility
+
+For providers or proxies using `api: "anthropic-messages"`, use `compat.supportsEagerToolInputStreaming` to control Anthropic fine-grained tool streaming compatibility.
+
+By default pi sends per-tool `eager_input_streaming: true`. If a proxy or Anthropic-compatible backend rejects that field, set `supportsEagerToolInputStreaming` to `false`. Pi will omit `tools[].eager_input_streaming` and send the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests instead.
+
+```json
+{
+  "providers": {
+    "anthropic-proxy": {
+      "baseUrl": "https://proxy.example.com",
+      "api": "anthropic-messages",
+      "apiKey": "ANTHROPIC_PROXY_KEY",
+      "compat": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsLongCacheRetention": true
+      },
+      "models": [
+        {
+          "id": "claude-opus-4-7",
+          "reasoning": true,
+          "input": ["text", "image"]
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `supportsEagerToolInputStreaming` | Whether the provider accepts per-tool `eager_input_streaming`. Default: `true`. Set to `false` to omit that field and use the legacy fine-grained tool streaming beta header on tool-enabled requests. |
+| `supportsLongCacheRetention` | Whether the provider accepts Anthropic long cache retention (`cache_control.ttl: "1h"`) when cache retention is `long`. Default: `true`. |
+
 ## OpenAI Compatibility
 
-For providers with partial OpenAI compatibility, use the `compat` field:
+For providers with partial OpenAI compatibility, use the `compat` field.
+
+- Provider-level `compat` applies defaults to all models under that provider.
+- Model-level `compat` overrides provider-level values for that model.
 
 ```json
 {
@@ -234,10 +332,23 @@ For providers with partial OpenAI compatibility, use the `compat` field:
 | `supportsStore` | Provider supports `store` field |
 | `supportsDeveloperRole` | Use `developer` vs `system` role |
 | `supportsReasoningEffort` | Support for `reasoning_effort` parameter |
+| `reasoningEffortMap` | Map pi thinking levels to provider-specific `reasoning_effort` values |
 | `supportsUsageInStreaming` | Supports `stream_options: { include_usage: true }` (default: `true`) |
 | `maxTokensField` | Use `max_completion_tokens` or `max_tokens` |
-| `openRouterRouting` | OpenRouter routing config passed to OpenRouter for model/provider selection |
+| `requiresToolResultName` | Include `name` on tool result messages |
+| `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |
+| `requiresThinkingAsText` | Convert thinking blocks to plain text |
+| `requiresReasoningContentOnAssistantMessages` | Include empty `reasoning_content` on all replayed assistant messages when reasoning is enabled |
+| `thinkingFormat` | Use `reasoning_effort`, `deepseek`, `zai`, `qwen`, or `qwen-chat-template` thinking parameters |
+| `cacheControlFormat` | Use Anthropic-style `cache_control` markers on the system prompt, last tool definition, and last user/assistant text content. Currently only `anthropic` is supported. |
+| `supportsStrictMode` | Include the `strict` field in tool definitions |
+| `supportsLongCacheRetention` | Whether the provider accepts long cache retention when cache retention is `long`: `prompt_cache_retention: "24h"` for OpenAI prompt caching, or `cache_control.ttl: "1h"` when `cacheControlFormat` is `anthropic`. Default: `true`. |
+| `openRouterRouting` | OpenRouter provider routing preferences. This object is sent as-is in the `provider` field of the [OpenRouter API request](https://openrouter.ai/docs/guides/routing/provider-selection). |
 | `vercelGatewayRouting` | Vercel AI Gateway routing config for provider selection (`only`, `order`) |
+
+`qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking`.
+
+`cacheControlFormat: "anthropic"` is for OpenAI-compatible providers that expose Anthropic-style prompt caching through `cache_control` markers on text content and tool definitions.
 
 Example:
 
@@ -254,8 +365,32 @@ Example:
           "name": "OpenRouter Claude 3.5 Sonnet",
           "compat": {
             "openRouterRouting": {
-              "order": ["anthropic"],
-              "fallbacks": ["openai"]
+              "allow_fallbacks": true,
+              "require_parameters": false,
+              "data_collection": "deny",
+              "zdr": true,
+              "enforce_distillable_text": false,
+              "order": ["anthropic", "amazon-bedrock", "google-vertex"],
+              "only": ["anthropic", "amazon-bedrock"],
+              "ignore": ["gmicloud", "friendli"],
+              "quantizations": ["fp16", "bf16"],
+              "sort": {
+                "by": "price",
+                "partition": "model"
+              },
+              "max_price": {
+                "prompt": 10,
+                "completion": 20
+              },
+              "preferred_min_throughput": {
+                "p50": 100,
+                "p90": 50
+              },
+              "preferred_max_latency": {
+                "p50": 1,
+                "p90": 3,
+                "p99": 5
+              }
             }
           }
         }

@@ -10,12 +10,14 @@ import { getModel, type OAuthCredentials, type OAuthProvider } from "@mariozechn
 import { getOAuthApiKey } from "@mariozechner/pi-ai/oauth";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import { createExtensionRuntime } from "../src/core/extensions/loader.js";
+import { createEventBus } from "../src/core/event-bus.js";
+import type { Extension, ExtensionFactory, LoadExtensionsResult } from "../src/core/extensions/index.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import type { ResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
-import { codingTools } from "../src/core/tools/index.js";
+import { createCodingTools } from "../src/index.js";
 
 /**
  * API key for authenticated tests. Tests using this should be wrapped in
@@ -69,7 +71,6 @@ function saveAuthStorage(storage: AuthStorageData): void {
  * For API key credentials, returns the key directly.
  * For OAuth credentials, returns the access token (refreshing if expired and saving back).
  *
- * For google-gemini-cli and google-antigravity, returns JSON-encoded { token, projectId }
  */
 export async function resolveApiKey(provider: string): Promise<string | undefined> {
 	const storage = loadAuthStorage();
@@ -175,16 +176,52 @@ export interface TestSessionContext {
 	cleanup: () => void;
 }
 
-export function createTestResourceLoader(): ResourceLoader {
+export interface CreateTestExtensionsResultInput {
+	factory: ExtensionFactory;
+	path?: string;
+}
+
+export async function createTestExtensionsResult(
+	inputs: Array<ExtensionFactory | CreateTestExtensionsResultInput>,
+	cwd = process.cwd(),
+): Promise<LoadExtensionsResult> {
+	const runtime = createExtensionRuntime();
+	const eventBus = createEventBus();
+	const extensions: Extension[] = [];
+
+	for (const [index, input] of inputs.entries()) {
+		const factory = typeof input === "function" ? input : input.factory;
+		const extensionPath =
+			typeof input === "function" ? `<inline:${index + 1}>` : (input.path ?? `<inline:${index + 1}>`);
+		extensions.push(await loadExtensionFromFactory(factory, cwd, eventBus, runtime, extensionPath));
+	}
+
 	return {
-		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+		extensions,
+		errors: [],
+		runtime,
+	};
+}
+
+export interface CreateTestResourceLoaderOptions {
+	extensionsResult?: LoadExtensionsResult;
+}
+
+export function createTestResourceLoader(options: CreateTestResourceLoaderOptions = {}): ResourceLoader {
+	const extensionsResult = options.extensionsResult ?? {
+		extensions: [],
+		errors: [],
+		runtime: createExtensionRuntime(),
+	};
+
+	return {
+		getExtensions: () => extensionsResult,
 		getSkills: () => ({ skills: [], diagnostics: [] }),
 		getPrompts: () => ({ prompts: [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
 		getAgentsFiles: () => ({ agentsFiles: [] }),
 		getSystemPrompt: () => undefined,
 		getAppendSystemPrompt: () => [],
-		getPathMetadata: () => new Map(),
 		extendResources: () => {},
 		reload: async () => {},
 	};
@@ -204,7 +241,7 @@ export function createTestSession(options: TestSessionOptions = {}): TestSession
 		initialState: {
 			model,
 			systemPrompt: options.systemPrompt ?? "You are a helpful assistant. Be extremely concise.",
-			tools: codingTools,
+			tools: createCodingTools(process.cwd()),
 		},
 	});
 
@@ -216,7 +253,7 @@ export function createTestSession(options: TestSessionOptions = {}): TestSession
 	}
 
 	const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-	const modelRegistry = new ModelRegistry(authStorage, tempDir);
+	const modelRegistry = ModelRegistry.create(authStorage, tempDir);
 
 	const session = new AgentSession({
 		agent,

@@ -7,7 +7,9 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
-import type { AgentSession } from "../core/agent-session.js";
+import type { AgentSessionRuntime } from "../core/agent-session-runtime.js";
+import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
+import { killTrackedDetachedChildren } from "../utils/shell.js";
 
 /**
  * Options for print mode.
@@ -27,98 +29,130 @@ export interface PrintModeOptions {
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
  */
-export async function runPrintMode(session: AgentSession, options: PrintModeOptions): Promise<void> {
+export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: PrintModeOptions): Promise<number> {
 	const { mode, messages = [], initialMessage, initialImages } = options;
-	if (mode === "json") {
-		const header = session.sessionManager.getHeader();
-		if (header) {
-			console.log(JSON.stringify(header));
+	let exitCode = 0;
+	let session = runtimeHost.session;
+	let unsubscribe: (() => void) | undefined;
+	let disposed = false;
+	const signalCleanupHandlers: Array<() => void> = [];
+
+	const disposeRuntime = async (): Promise<void> => {
+		if (disposed) return;
+		disposed = true;
+		unsubscribe?.();
+		await runtimeHost.dispose();
+	};
+
+	const registerSignalHandlers = (): void => {
+		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		if (process.platform !== "win32") {
+			signals.push("SIGHUP");
 		}
-	}
-	// Set up extensions for print mode (no UI)
-	await session.bindExtensions({
-		commandContextActions: {
-			waitForIdle: () => session.agent.waitForIdle(),
-			newSession: async (options) => {
-				const success = await session.newSession({ parentSession: options?.parentSession });
-				if (success && options?.setup) {
-					await options.setup(session.sessionManager);
-				}
-				return { cancelled: !success };
-			},
-			fork: async (entryId) => {
-				const result = await session.fork(entryId);
-				return { cancelled: result.cancelled };
-			},
-			navigateTree: async (targetId, options) => {
-				const result = await session.navigateTree(targetId, {
-					summarize: options?.summarize,
-					customInstructions: options?.customInstructions,
-					replaceInstructions: options?.replaceInstructions,
-					label: options?.label,
+
+		for (const signal of signals) {
+			const handler = () => {
+				killTrackedDetachedChildren();
+				void disposeRuntime().finally(() => {
+					process.exit(signal === "SIGHUP" ? 129 : 143);
 				});
-				return { cancelled: result.cancelled };
-			},
-			switchSession: async (sessionPath) => {
-				const success = await session.switchSession(sessionPath);
-				return { cancelled: !success };
-			},
-			reload: async () => {
-				await session.reload();
-			},
-		},
-		onError: (err) => {
-			console.error(`Extension error (${err.extensionPath}): ${err.error}`);
-		},
-	});
-
-	// Always subscribe to enable session persistence via _handleAgentEvent
-	session.subscribe((event) => {
-		// In JSON mode, output all events
-		if (mode === "json") {
-			console.log(JSON.stringify(event));
+			};
+			process.on(signal, handler);
+			signalCleanupHandlers.push(() => process.off(signal, handler));
 		}
+	};
+
+	registerSignalHandlers();
+
+	runtimeHost.setRebindSession(async () => {
+		await rebindSession();
 	});
 
-	// Send initial message with attachments
-	if (initialMessage) {
-		await session.prompt(initialMessage, { images: initialImages });
-	}
+	const rebindSession = async (): Promise<void> => {
+		session = runtimeHost.session;
+		await session.bindExtensions({
+			commandContextActions: {
+				waitForIdle: () => session.agent.waitForIdle(),
+				newSession: async (newSessionOptions) => runtimeHost.newSession(newSessionOptions),
+				fork: async (entryId, forkOptions) => {
+					const result = await runtimeHost.fork(entryId, forkOptions);
+					return { cancelled: result.cancelled };
+				},
+				navigateTree: async (targetId, navigateOptions) => {
+					const result = await session.navigateTree(targetId, {
+						summarize: navigateOptions?.summarize,
+						customInstructions: navigateOptions?.customInstructions,
+						replaceInstructions: navigateOptions?.replaceInstructions,
+						label: navigateOptions?.label,
+					});
+					return { cancelled: result.cancelled };
+				},
+				switchSession: async (sessionPath, switchOptions) => {
+					return runtimeHost.switchSession(sessionPath, switchOptions);
+				},
+				reload: async () => {
+					await session.reload();
+				},
+			},
+			onError: (err) => {
+				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
+			},
+		});
 
-	// Send remaining messages
-	for (const message of messages) {
-		await session.prompt(message);
-	}
-
-	// In text mode, output final response
-	if (mode === "text") {
-		const state = session.state;
-		const lastMessage = state.messages[state.messages.length - 1];
-
-		if (lastMessage?.role === "assistant") {
-			const assistantMsg = lastMessage as AssistantMessage;
-
-			// Check for error/aborted
-			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-				process.exit(1);
+		unsubscribe?.();
+		unsubscribe = session.subscribe((event) => {
+			if (mode === "json") {
+				writeRawStdout(`${JSON.stringify(event)}\n`);
 			}
+		});
+	};
 
-			// Output text content
-			for (const content of assistantMsg.content) {
-				if (content.type === "text") {
-					console.log(content.text);
+	try {
+		if (mode === "json") {
+			const header = session.sessionManager.getHeader();
+			if (header) {
+				writeRawStdout(`${JSON.stringify(header)}\n`);
+			}
+		}
+
+		await rebindSession();
+
+		if (initialMessage) {
+			await session.prompt(initialMessage, { images: initialImages });
+		}
+
+		for (const message of messages) {
+			await session.prompt(message);
+		}
+
+		if (mode === "text") {
+			const state = session.state;
+			const lastMessage = state.messages[state.messages.length - 1];
+
+			if (lastMessage?.role === "assistant") {
+				const assistantMsg = lastMessage as AssistantMessage;
+				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					exitCode = 1;
+				} else {
+					for (const content of assistantMsg.content) {
+						if (content.type === "text") {
+							writeRawStdout(`${content.text}\n`);
+						}
+					}
 				}
 			}
 		}
-	}
 
-	// Ensure stdout is fully flushed before returning
-	// This prevents race conditions where the process exits before all output is written
-	await new Promise<void>((resolve, reject) => {
-		process.stdout.write("", (err) => {
-			if (err) reject(err);
-			else resolve();
-		});
-	});
+		return exitCode;
+	} catch (error: unknown) {
+		console.error(error instanceof Error ? error.message : String(error));
+		return 1;
+	} finally {
+		for (const cleanup of signalCleanupHandlers) {
+			cleanup();
+		}
+		await disposeRuntime();
+		await flushRawStdout();
+	}
 }

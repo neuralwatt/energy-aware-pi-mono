@@ -6,6 +6,7 @@ import chalk from "chalk";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.js";
+import { migrateKeybindingsConfig } from "./core/keybindings.js";
 
 const MIGRATION_GUIDE_URL =
 	"https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
@@ -152,6 +153,23 @@ function migrateCommandsToPrompts(baseDir: string, label: string): boolean {
 	return false;
 }
 
+function migrateKeybindingsConfigFile(): void {
+	const configPath = join(getAgentDir(), "keybindings.json");
+	if (!existsSync(configPath)) return;
+
+	try {
+		const parsed = JSON.parse(readFileSync(configPath, "utf-8")) as unknown;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+			return;
+		}
+		const { config, migrated } = migrateKeybindingsConfig(parsed as Record<string, unknown>);
+		if (!migrated) return;
+		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+	} catch {
+		// Ignore malformed files during migration
+	}
+}
+
 /**
  * Move fd/rg binaries from tools/ to bin/ if they exist.
  */
@@ -283,13 +301,14 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
  *
  * @returns Object with migration results and deprecation warnings
  */
-export function runMigrations(cwd: string = process.cwd()): {
+export function runMigrations(cwd: string): {
 	migratedAuthProviders: string[];
 	deprecationWarnings: string[];
 } {
 	const migratedAuthProviders = migrateAuthToAuthJson();
 	migrateSessionsFromAgentRoot();
 	migrateToolsToBin();
+	migrateKeybindingsConfigFile();
 	const deprecationWarnings = migrateExtensionSystem(cwd);
 	return { migratedAuthProviders, deprecationWarnings };
 }

@@ -13,7 +13,7 @@
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 interface Todo {
 	id: number;
@@ -130,8 +130,6 @@ export default function (pi: ExtensionAPI) {
 
 	// Reconstruct state on session events
 	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_switch", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_fork", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
 	// Register the todo tool for the LLM
@@ -220,14 +218,14 @@ export default function (pi: ExtensionAPI) {
 			}
 		},
 
-		renderCall(args, theme) {
+		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action);
 			if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
 			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme) {
+		renderResult(result, { expanded }, theme, _context) {
 			const details = result.details as TodoDetails | undefined;
 			if (!details) {
 				const text = result.content[0];

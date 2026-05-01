@@ -9,6 +9,10 @@
 
     :root {
       --line-height: 18px; /* 12px font * 1.5 */
+      --sidebar-width: 400px;
+      --sidebar-min-width: 240px;
+      --sidebar-max-width: 840px;
+      --sidebar-resizer-width: 6px;
     }
 
     body {
@@ -19,6 +23,11 @@
       background: var(--body-bg);
     }
 
+    body.sidebar-resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
+
     #app {
       display: flex;
       min-height: 100vh;
@@ -26,7 +35,9 @@
 
     /* Sidebar */
     #sidebar {
-      width: 400px;
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
+      max-width: var(--sidebar-width);
       background: var(--container-bg);
       flex-shrink: 0;
       display: flex;
@@ -35,6 +46,24 @@
       top: 0;
       height: 100vh;
       border-right: 1px solid var(--dim);
+    }
+
+    #sidebar-resizer {
+      width: var(--sidebar-resizer-width);
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      cursor: col-resize;
+      touch-action: none;
+      background: transparent;
+      border-right: 1px solid transparent;
+    }
+
+    #sidebar-resizer:hover,
+    body.sidebar-resizing #sidebar-resizer {
+      background: var(--selectedBg);
+      border-right-color: var(--dim);
     }
 
     .sidebar-header {
@@ -213,6 +242,7 @@
     /* Main content */
     #content {
       flex: 1;
+      min-width: 0;
       overflow-y: auto;
       padding: var(--line-height) calc(var(--line-height) * 2);
       display: flex;
@@ -232,9 +262,23 @@
       margin-bottom: var(--line-height);
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
       gap: 12px;
     }
 
+    .help-hint {
+      flex: 1 1 240px;
+    }
+
+    .help-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .header-toggle-btn,
     .download-json-btn {
       font-size: 10px;
       padding: 2px 8px;
@@ -246,6 +290,7 @@
       font-family: inherit;
     }
 
+    .header-toggle-btn:hover,
     .download-json-btn:hover {
       background: var(--hover);
       border-color: var(--borderAccent);
@@ -460,11 +505,17 @@
     }
 
     .tool-output > div,
-    .output-preview,
-    .output-full {
+    .output-preview > div,
+    .output-full > div {
       margin: 0;
       padding: 0;
       line-height: var(--line-height);
+    }
+
+    .tool-output > div:not(.output-preview):not(.output-full),
+    .output-preview > div:not(.expand-hint),
+    .output-full > div:not(.expand-hint) {
+      white-space: pre-wrap;
     }
 
     .tool-output pre {
@@ -504,7 +555,7 @@
     }
 
     .ansi-line {
-      white-space: pre-wrap;
+      white-space: pre;
     }
 
     .tool-images {
@@ -923,17 +974,24 @@
     @media (max-width: 900px) {
       #sidebar {
         position: fixed;
-        left: -400px;
-        width: 400px;
+        left: 0;
+        width: min(var(--sidebar-width), 100vw);
+        min-width: min(var(--sidebar-width), 100vw);
+        max-width: min(var(--sidebar-width), 100vw);
         top: 0;
         bottom: 0;
         height: 100vh;
         z-index: 99;
-        transition: left 0.3s;
+        transform: translateX(-100%);
+        transition: transform 0.3s;
       }
 
       #sidebar.open {
-        left: 0;
+        transform: translateX(0);
+      }
+
+      #sidebar-resizer {
+        display: none;
       }
 
       #sidebar-overlay.open {
@@ -957,15 +1015,8 @@
       }
     }
 
-    @media (max-width: 500px) {
-      #sidebar {
-        width: 100vw;
-        left: -100vw;
-      }
-    }
-
     @media print {
-      #sidebar, #sidebar-toggle { display: none !important; }
+      #sidebar, #sidebar-resizer, #sidebar-toggle { display: none !important; }
       body { background: white; color: black; }
       #content { max-width: none; }
     }

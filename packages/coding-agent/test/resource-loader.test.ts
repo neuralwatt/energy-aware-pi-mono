@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { Skill } from "../src/core/skills.js";
+import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -155,6 +156,36 @@ Project skill`,
 			expect(theme?.sourcePath).toBe(projectThemePath);
 		});
 
+		it("should load symlinked user and project extensions once", async () => {
+			const sharedExtDir = join(tempDir, "shared-extensions");
+			mkdirSync(sharedExtDir, { recursive: true });
+			writeFileSync(
+				join(sharedExtDir, "shared.ts"),
+				`export default function(pi) {
+	pi.registerCommand("shared", {
+		description: "shared command",
+		handler: async () => {},
+	});
+}`,
+			);
+
+			mkdirSync(agentDir, { recursive: true });
+			mkdirSync(join(cwd, ".pi"), { recursive: true });
+			symlinkSync(sharedExtDir, join(agentDir, "extensions"), "dir");
+			symlinkSync(sharedExtDir, join(cwd, ".pi", "extensions"), "dir");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const extensionsResult = loader.getExtensions();
+			expect(extensionsResult.extensions).toHaveLength(1);
+			expect(extensionsResult.errors).toEqual([]);
+
+			// mergePaths processes project paths before user paths, so the project
+			// alias is the canonical survivor.
+			expect(extensionsResult.extensions[0].path).toBe(join(cwd, ".pi", "extensions", "shared.ts"));
+		});
+
 		it("should keep both extensions loaded when command names collide", async () => {
 			const userExtDir = join(agentDir, "extensions");
 			const projectExtDir = join(cwd, ".pi", "extensions");
@@ -194,11 +225,11 @@ Project skill`,
 
 			const extensionsResult = loader.getExtensions();
 			expect(extensionsResult.extensions).toHaveLength(2);
-			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(true);
+			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(false);
 
 			const sessionManager = SessionManager.inMemory();
 			const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-			const modelRegistry = new ModelRegistry(authStorage);
+			const modelRegistry = ModelRegistry.create(authStorage);
 			const runner = new ExtensionRunner(
 				extensionsResult.extensions,
 				extensionsResult.runtime,
@@ -207,12 +238,18 @@ Project skill`,
 				modelRegistry,
 			);
 
-			expect(runner.getCommand("deploy")?.description).toBe("project deploy");
+			expect(runner.getCommand("deploy:1")?.description).toBe("project deploy");
+			expect(runner.getCommand("deploy:2")?.description).toBe("user deploy");
 			expect(runner.getCommand("project-only")?.description).toBe("project only");
 			expect(runner.getCommand("user-only")?.description).toBe("user only");
 
-			const commandNames = runner.getRegisteredCommands().map((c) => c.name);
-			expect(commandNames.filter((name) => name === "deploy")).toHaveLength(1);
+			const commands = runner.getRegisteredCommands();
+			expect(commands.map((command) => command.invocationName)).toEqual([
+				"deploy:1",
+				"project-only",
+				"deploy:2",
+				"user-only",
+			]);
 		});
 
 		it("should honor overrides for auto-discovered resources", async () => {
@@ -267,6 +304,17 @@ Content`,
 
 			const { agentsFiles } = loader.getAgentsFiles();
 			expect(agentsFiles.some((f) => f.path.includes("AGENTS.md"))).toBe(true);
+		});
+
+		it("should skip AGENTS.md and CLAUDE.md discovery when noContextFiles is true", async () => {
+			writeFileSync(join(cwd, "AGENTS.md"), "# Project Guidelines\n\nBe helpful.");
+			writeFileSync(join(cwd, "CLAUDE.md"), "# Claude Guidelines\n\nBe helpful.");
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noContextFiles: true });
+			await loader.reload();
+
+			const { agentsFiles } = loader.getAgentsFiles();
+			expect(agentsFiles).toEqual([]);
 		});
 
 		it("should discover SYSTEM.md from cwd/.pi", async () => {
@@ -346,14 +394,16 @@ Extra prompt content`,
 			});
 
 			const { skills } = loader.getSkills();
-			expect(skills.some((skill) => skill.name === "extra-skill")).toBe(true);
+			const loadedSkill = skills.find((skill) => skill.name === "extra-skill");
+			expect(loadedSkill).toBeDefined();
+			expect(loadedSkill?.sourceInfo?.source).toBe("extension:extra");
+			expect(loadedSkill?.sourceInfo?.path).toBe(skillPath);
 
 			const { prompts } = loader.getPrompts();
-			expect(prompts.some((prompt) => prompt.name === "extra")).toBe(true);
-
-			const metadata = loader.getPathMetadata();
-			expect(metadata.get(skillPath)?.source).toBe("extension:extra");
-			expect(metadata.get(promptPath)?.source).toBe("extension:extra");
+			const loadedPrompt = prompts.find((prompt) => prompt.name === "extra");
+			expect(loadedPrompt).toBeDefined();
+			expect(loadedPrompt?.sourceInfo?.source).toBe("extension:extra");
+			expect(loadedPrompt?.sourceInfo?.path).toBe(promptPath);
 		});
 	});
 
@@ -409,7 +459,7 @@ Content`,
 				description: "Injected skill",
 				filePath: "/fake/path",
 				baseDir: "/fake",
-				source: "custom",
+				sourceInfo: createSyntheticSourceInfo("/fake/path", { source: "custom" }),
 				disableModelInvocation: false,
 			};
 			const loader = new DefaultResourceLoader({
@@ -451,7 +501,7 @@ Content`,
 				join(ext1Dir, "index.ts"),
 				`
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
     name: "duplicate-tool",
@@ -466,7 +516,7 @@ export default function(pi: ExtensionAPI) {
 				join(ext2Dir, "index.ts"),
 				`
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
     name: "duplicate-tool",
@@ -493,7 +543,7 @@ export default function(pi: ExtensionAPI) {
 				join(globalExtDir, "global.ts"),
 				`
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
     name: "duplicate-tool",
@@ -512,7 +562,7 @@ export default function(pi: ExtensionAPI) {
 				explicitExtPath,
 				`
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 export default function(pi: ExtensionAPI) {
   pi.registerTool({
     name: "duplicate-tool",
@@ -539,7 +589,7 @@ export default function(pi: ExtensionAPI) {
 
 			const sessionManager = SessionManager.inMemory();
 			const authStorage = AuthStorage.create(join(tempDir, "auth-explicit.json"));
-			const modelRegistry = new ModelRegistry(authStorage);
+			const modelRegistry = ModelRegistry.create(authStorage);
 			const runner = new ExtensionRunner(
 				extensionsResult.extensions,
 				extensionsResult.runtime,
@@ -548,7 +598,8 @@ export default function(pi: ExtensionAPI) {
 				modelRegistry,
 			);
 
-			expect(runner.getCommand("deploy")?.description).toBe("explicit command");
+			expect(runner.getCommand("deploy:1")?.description).toBe("explicit command");
+			expect(runner.getCommand("deploy:2")?.description).toBe("global command");
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
 		});
 	});

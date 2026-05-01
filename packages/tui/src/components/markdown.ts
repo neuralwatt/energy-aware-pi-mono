@@ -1,7 +1,31 @@
-import { marked, type Token } from "marked";
-import { isImageLine } from "../terminal-image.js";
+import { Marked, type Token, Tokenizer, type Tokens } from "marked";
+import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.js";
 import type { Component } from "../tui.js";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+
+const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+
+class StrictStrikethroughTokenizer extends Tokenizer {
+	override del(src: string): Tokens.Del | undefined {
+		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
+		if (!match) {
+			return undefined;
+		}
+
+		const text = match[2];
+		return {
+			type: "del",
+			raw: match[0],
+			text,
+			tokens: this.lexer.inlineTokens(text),
+		};
+	}
+}
+
+const markdownParser = new Marked();
+markdownParser.setOptions({
+	tokenizer: new StrictStrikethroughTokenizer(),
+});
 
 /**
  * Default text styling for markdown content.
@@ -112,7 +136,7 @@ export class Markdown implements Component {
 		const normalizedText = this.text.replace(/\t/g, "   ");
 
 		// Parse markdown to HTML-like tokens
-		const tokens = marked.lexer(normalizedText);
+		const tokens = markdownParser.lexer(normalizedText);
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];
@@ -272,17 +296,26 @@ export class Markdown implements Component {
 			case "heading": {
 				const headingLevel = token.depth;
 				const headingPrefix = `${"#".repeat(headingLevel)} `;
-				const headingText = this.renderInlineTokens(token.tokens || [], styleContext);
-				let styledHeading: string;
+
+				// Build a heading-specific style context so inline tokens (codespan, bold, etc.)
+				// restore heading styling after their own ANSI resets instead of falling back to
+				// the default text style.
+				let headingStyleFn: (text: string) => string;
 				if (headingLevel === 1) {
-					styledHeading = this.theme.heading(this.theme.bold(this.theme.underline(headingText)));
-				} else if (headingLevel === 2) {
-					styledHeading = this.theme.heading(this.theme.bold(headingText));
+					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(this.theme.underline(text)));
 				} else {
-					styledHeading = this.theme.heading(this.theme.bold(headingPrefix + headingText));
+					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(text));
 				}
+
+				const headingStyleContext: InlineStyleContext = {
+					applyText: headingStyleFn,
+					stylePrefix: this.getStylePrefix(headingStyleFn),
+				};
+
+				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
+				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
 				lines.push(styledHeading);
-				if (nextTokenType !== "space") {
+				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after headings (unless space token follows)
 				}
 				break;
@@ -314,7 +347,7 @@ export class Markdown implements Component {
 					}
 				}
 				lines.push(this.theme.codeBlockBorder("```"));
-				if (nextTokenType !== "space") {
+				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after code blocks (unless space token follows)
 				}
 				break;
@@ -329,7 +362,7 @@ export class Markdown implements Component {
 			}
 
 			case "table": {
-				const tableLines = this.renderTable(token as any, width, styleContext);
+				const tableLines = this.renderTable(token as any, width, nextTokenType, styleContext);
 				lines.push(...tableLines);
 				break;
 			}
@@ -353,7 +386,7 @@ export class Markdown implements Component {
 				// Default message style should not apply inside blockquotes.
 				const quoteInlineStyleContext: InlineStyleContext = {
 					applyText: (text: string) => text,
-					stylePrefix: "",
+					stylePrefix: quoteStylePrefix,
 				};
 				const quoteTokens = token.tokens || [];
 				const renderedQuoteLines: string[] = [];
@@ -377,7 +410,7 @@ export class Markdown implements Component {
 						lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
 					}
 				}
-				if (nextTokenType !== "space") {
+				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after blockquotes (unless space token follows)
 				}
 				break;
@@ -385,7 +418,7 @@ export class Markdown implements Component {
 
 			case "hr":
 				lines.push(this.theme.hr("─".repeat(Math.min(width, 80))));
-				if (nextTokenType !== "space") {
+				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after horizontal rules (unless space token follows)
 				}
 				break;
@@ -455,18 +488,22 @@ export class Markdown implements Component {
 
 				case "link": {
 					const linkText = this.renderInlineTokens(token.tokens || [], resolvedStyleContext);
-					// If link text matches href, only show the link once
-					// Compare raw text (token.text) not styled text (linkText) since linkText has ANSI codes
-					// For mailto: links, strip the prefix before comparing (autolinked emails have
-					// text="foo@bar.com" but href="mailto:foo@bar.com")
-					const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
-					if (token.text === token.href || token.text === hrefForComparison) {
-						result += this.theme.link(this.theme.underline(linkText)) + stylePrefix;
+					const styledLink = this.theme.link(this.theme.underline(linkText));
+					if (getCapabilities().hyperlinks) {
+						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
+						// so we always show only the link text regardless of whether it matches href.
+						result += hyperlink(styledLink, token.href) + stylePrefix;
 					} else {
-						result +=
-							this.theme.link(this.theme.underline(linkText)) +
-							this.theme.linkUrl(` (${token.href})`) +
-							stylePrefix;
+						// Fallback: print URL in parentheses when text differs from href.
+						// Compare raw token.text (not styled) against href for the equality check.
+						// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com"
+						// but href="mailto:foo@bar.com").
+						const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
+						if (token.text === token.href || token.text === hrefForComparison) {
+							result += styledLink + stylePrefix;
+						} else {
+							result += styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
+						}
 					}
 					break;
 				}
@@ -494,6 +531,10 @@ export class Markdown implements Component {
 						result += applyTextWithNewlines(token.text);
 					}
 			}
+		}
+
+		while (stylePrefix && result.endsWith(stylePrefix)) {
+			result = result.slice(0, -stylePrefix.length);
 		}
 
 		return result;
@@ -638,6 +679,7 @@ export class Markdown implements Component {
 	private renderTable(
 		token: Token & { header: any[]; rows: any[][]; raw?: string },
 		availableWidth: number,
+		nextTokenType?: string,
 		styleContext?: InlineStyleContext,
 	): string[] {
 		const lines: string[] = [];
@@ -654,7 +696,9 @@ export class Markdown implements Component {
 		if (availableForCells < numCols) {
 			// Too narrow to render a stable table. Fall back to raw markdown.
 			const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
-			fallbackLines.push("");
+			if (nextTokenType && nextTokenType !== "space") {
+				fallbackLines.push("");
+			}
 			return fallbackLines;
 		}
 
@@ -800,7 +844,9 @@ export class Markdown implements Component {
 		const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
 		lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
 
-		lines.push(""); // Add spacing after table
+		if (nextTokenType && nextTokenType !== "space") {
+			lines.push(""); // Add spacing after table
+		}
 		return lines;
 	}
 }

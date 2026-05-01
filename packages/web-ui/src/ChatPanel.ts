@@ -59,6 +59,7 @@ export class ChatPanel extends LitElement {
 			onApiKeyRequired?: (provider: string) => Promise<boolean>;
 			onBeforeSend?: () => void | Promise<void>;
 			onCostClick?: () => void;
+			onModelSelect?: () => void;
 			sandboxUrlProvider?: () => string;
 			toolsFactory?: (
 				agent: Agent,
@@ -78,6 +79,7 @@ export class ChatPanel extends LitElement {
 		this.agentInterface.enableThinkingSelector = true;
 		this.agentInterface.showThemeToggle = false;
 		this.agentInterface.onApiKeyRequired = config?.onApiKeyRequired;
+		this.agentInterface.onModelSelect = config?.onModelSelect;
 		this.agentInterface.onBeforeSend = config?.onBeforeSend;
 		this.agentInterface.onCostClick = config?.onCostClick;
 
@@ -139,7 +141,7 @@ export class ChatPanel extends LitElement {
 		const additionalTools =
 			config?.toolsFactory?.(agent, this.agentInterface, this.artifactsPanel, runtimeProvidersFactory) || [];
 		const tools = [this.artifactsPanel.tool, ...additionalTools];
-		this.agent.setTools(tools);
+		this.agent.state.tools = tools;
 
 		// Reconstruct artifacts from existing messages
 		// Temporarily disable the onArtifactsChange callback to prevent auto-opening on load

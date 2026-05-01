@@ -1,6 +1,8 @@
 # SDK Examples
 
-Programmatic usage of pi-coding-agent via `createAgentSession()`.
+Programmatic usage of pi-coding-agent via `createAgentSession()` and `createAgentSessionRuntime()`.
+
+The runtime example shows how to build a recreate function that closes over process-global fixed inputs and recreates cwd-bound services and sessions as the active session cwd changes.
 
 ## Examples
 
@@ -18,6 +20,7 @@ Programmatic usage of pi-coding-agent via `createAgentSession()`.
 | `10-settings.ts` | Override compaction, retry, terminal settings |
 | `11-sessions.ts` | In-memory, persistent, continue, list sessions |
 | `12-full-control.ts` | Replace everything, no discovery |
+| `13-session-runtime.ts` | Manage runtime-backed session replacement |
 
 ## Running
 
@@ -44,7 +47,7 @@ import {
 
 // Auth and models setup
 const authStorage = AuthStorage.create();
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = ModelRegistry.create(authStorage);
 
 // Minimal
 const { session } = await createAgentSession({ authStorage, modelRegistry });
@@ -73,7 +76,7 @@ const { session } = await createAgentSession({
 // Full control
 const customAuth = AuthStorage.create("/my/app/auth.json");
 customAuth.setRuntimeApiKey("anthropic", process.env.MY_KEY!);
-const customRegistry = new ModelRegistry(customAuth);
+const customRegistry = ModelRegistry.create(customAuth);
 
 const resourceLoader = new DefaultResourceLoader({
   systemPromptOverride: () => "You are helpful.",
@@ -109,7 +112,7 @@ await session.prompt("Hello");
 | Option | Default | Description |
 |--------|---------|-------------|
 | `authStorage` | `AuthStorage.create()` | Credential storage |
-| `modelRegistry` | `new ModelRegistry(authStorage)` | Model registry |
+| `modelRegistry` | `ModelRegistry.create(authStorage)` | Model registry |
 | `cwd` | `process.cwd()` | Working directory |
 | `agentDir` | `~/.pi/agent` | Config directory |
 | `model` | From settings/first available | Model to use |

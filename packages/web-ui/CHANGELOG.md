@@ -2,6 +2,117 @@
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-04-30
+
+## [0.70.6] - 2026-04-28
+
+## [0.70.5] - 2026-04-27
+
+## [0.70.4] - 2026-04-27
+
+## [0.70.3] - 2026-04-27
+
+## [0.70.2] - 2026-04-24
+
+## [0.70.1] - 2026-04-24
+
+## [0.70.0] - 2026-04-23
+
+## [0.69.0] - 2026-04-22
+
+### Breaking Changes
+
+- Migrated the web UI's TypeBox-based tool definitions and runtime dependency from `@sinclair/typebox` 0.34.x to `typebox` 1.x. Install and import from `typebox` instead of `@sinclair/typebox` when embedding or extending `@mariozechner/pi-web-ui` with shared TypeBox schemas ([#3112](https://github.com/badlogic/pi-mono/issues/3112))
+
+### Fixed
+
+- Render SVG artifact previews through a blob-backed image instead of injecting untrusted SVG markup into the page DOM ([#3552](https://github.com/badlogic/pi-mono/issues/3552))
+
+## [0.68.1] - 2026-04-22
+
+## [0.68.0] - 2026-04-20
+
+## [0.67.68] - 2026-04-17
+
+## [0.67.67] - 2026-04-17
+
+## [0.67.6] - 2026-04-16
+
+## [0.67.5] - 2026-04-16
+
+## [0.67.4] - 2026-04-16
+
+## [0.67.3] - 2026-04-15
+
+## [0.67.2] - 2026-04-14
+
+## [0.67.1] - 2026-04-13
+
+## [0.67.0] - 2026-04-13
+
+## [0.66.1] - 2026-04-08
+
+## [0.66.0] - 2026-04-08
+
+## [0.65.2] - 2026-04-06
+
+## [0.65.1] - 2026-04-05
+
+## [0.65.0] - 2026-04-03
+
+## [0.64.0] - 2026-03-29
+
+## [0.63.2] - 2026-03-29
+
+## [0.63.1] - 2026-03-27
+
+## [0.63.0] - 2026-03-27
+
+## [0.62.0] - 2026-03-23
+
+## [0.61.1] - 2026-03-20
+
+## [0.61.0] - 2026-03-20
+
+## [0.60.0] - 2026-03-18
+
+## [0.59.0] - 2026-03-17
+
+### Added
+
+- Exported `CustomProviderDialog` from `@mariozechner/pi-web-ui` ([#2267](https://github.com/badlogic/pi-mono/issues/2267))
+
+## [0.58.4] - 2026-03-16
+
+### Added
+
+- `onModelSelect` callback on `AgentInterface` and `ChatPanel.setAgent` config
+- `allowedProviders` filter on `ModelSelector.open()` to restrict visible models
+- `onClose` callback on `SettingsDialog.open()`
+- `state_change` event emitted by Agent on `setModel()` and `setThinkingLevel()`
+- Subsequence-based fuzzy search in model selector (replaces substring matching)
+- `openai-codex` and `github-copilot` to `shouldUseProxyForProvider`
+
+### Changed
+
+- Anthropic test model updated from `claude-3-5-haiku-20241022` to `claude-haiku-4-5`
+
+### Fixed
+
+- `AgentInterface` clears streaming container on `message_end` to prevent duplicate tool rendering
+
+## [0.58.3] - 2026-03-15
+
+### Fixed
+
+- Build `@mariozechner/pi-web-ui` with `tsc` instead of `tsgo` so Lit decorator-based state updates rerender correctly.
+
+## [0.58.2] - 2026-03-15
+
+## [0.58.1] - 2026-03-14
+
+## [0.58.0] - 2026-03-14
+
 ## [0.57.1] - 2026-03-07
 
 ## [0.57.0] - 2026-03-07
