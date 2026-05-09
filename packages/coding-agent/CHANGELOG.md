@@ -2,6 +2,112 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Together AI to built-in provider setup, `/login` API-key auth, and default model resolution ([#3624](https://github.com/earendil-works/pi-mono/pull/3624) by [@Nutlope](https://github.com/Nutlope)).
+
+### Fixed
+
+- Fixed keybinding hints to show Option instead of Alt on macOS ([#4289](https://github.com/earendil-works/pi/issues/4289)).
+- Fixed the interactive update notification to render the changelog as an OSC 8 hyperlink when the terminal supports hyperlinks ([#4280](https://github.com/earendil-works/pi/issues/4280)).
+
+## [0.74.0] - 2026-05-07
+
+### Changed
+
+- Updated repository links and package references for the move to `earendil-works/pi-mono` and `@earendil-works/*` package scopes.
+
+## [0.73.1] - 2026-05-07
+
+### New Features
+
+- **Self-update support for the npm scope migration**: `pi update --self` now supports the upcoming package rename from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent`. After the new package is published, existing global installs can update through the normal self-update flow; pi will uninstall the old global package and install the package name returned by the version check endpoint.
+- **Interactive OAuth login selection**: OAuth providers can now present multiple login choices in `/login`, enabling provider-specific interactive authentication flows. See [Providers](docs/providers.md).
+- **JSONC-style `models.json` parsing**: `models.json` now allows comments and trailing commas, making custom provider and model configuration easier to maintain. See [Providers](docs/providers.md) and [Custom Providers](docs/custom-provider.md).
+
+### Added
+
+- Added interactive login selection support so OAuth providers can present multiple login choices ([#4190](https://github.com/earendil-works/pi-mono/pull/4190) by [@mitsuhiko](https://github.com/mitsuhiko)).
+
+### Changed
+
+- Changed `pi update --self` to honor the active package name returned by the Pi version check endpoint, defaulting to the current package when omitted and uninstalling the old global package before installing a renamed package.
+- Changed extension loading to use upstream `jiti` 2.7 instead of the `@mariozechner/jiti` fork ([#4244](https://github.com/earendil-works/pi-mono/pull/4244) by [@pi0](https://github.com/pi0)).
+- Changed `models.json` parsing to allow comments and trailing commas ([#4162](https://github.com/earendil-works/pi-mono/pull/4162) by [@julien-c](https://github.com/julien-c)).
+
+### Fixed
+
+- Fixed `pi -p` treating prompts that start with YAML frontmatter as extension flags instead of user messages ([#4163](https://github.com/badlogic/pi-mono/issues/4163)).
+- Fixed pending tool results not updating in the live TUI after toggling thinking block visibility while the tool is running ([#4167](https://github.com/badlogic/pi-mono/issues/4167)).
+- Fixed `/copy` reporting success on Linux without writing the clipboard on Wayland-only compositors (Hyprland, Niri, ...) by skipping the X11-only native addon on Linux and routing through `wl-copy`/`xclip`/`xsel` instead ([#4177](https://github.com/badlogic/pi-mono/issues/4177)).
+- Fixed HTML session exports to strip skill wrapper XML from rendered user messages ([#4234](https://github.com/earendil-works/pi-mono/pull/4234) by [@aliou](https://github.com/aliou)).
+- Fixed OpenAI-compatible chat completion streams that interleave content and tool-call deltas in the same choice.
+- Fixed OpenAI Codex OAuth refresh failures writing directly to stderr while the TUI is active ([#4141](https://github.com/badlogic/pi-mono/issues/4141)).
+- Fixed OpenAI Codex Responses requests to send a non-empty system prompt ([#4184](https://github.com/earendil-works/pi-mono/issues/4184)).
+- Fixed Kimi For Coding model resolution for the Kimi K2 P6 alias ([#4218](https://github.com/earendil-works/pi-mono/issues/4218)).
+- Fixed Kitty inline image redraws to stay within TUI-owned terminal regions and avoid writing below the active viewport.
+- Fixed Kitty inline image rendering by letting the terminal allocate image ids and bounding parsed image ids to valid values.
+- Fixed inline image capability detection to disable inline images in cmux terminals.
+
+## [0.73.0] - 2026-05-04
+
+### New Features
+
+- **Xiaomi MiMo API billing and regional Token Plan providers** - `xiaomi` now uses API billing, with separate `xiaomi-token-plan-{cn,ams,sgp}` providers. See [docs/providers.md#api-keys](docs/providers.md#api-keys) and [README.md#providers--models](README.md#providers--models). ([#4112](https://github.com/badlogic/pi-mono/pull/4112) by [@Phoen1xCode](https://github.com/Phoen1xCode))
+- **Incremental bash output streaming** - Bash tool output now appears while commands run instead of only after completion. ([#4145](https://github.com/badlogic/pi-mono/issues/4145))
+- **Compact read rendering** - Interactive `read` output for Pi docs, context files, and skills is collapsed by default and shows selected line ranges.
+
+### Breaking Changes
+
+- Switched the built-in `xiaomi` provider from Token Plan AMS to Xiaomi's API billing endpoint, and renamed its `/login` display from "Xiaomi MiMo Token Plan" to "Xiaomi MiMo". `XIAOMI_API_KEY` now refers to the API billing key from [platform.xiaomimimo.com](https://platform.xiaomimimo.com). Users on Token Plan should switch to the appropriate `xiaomi-token-plan-*` provider and set the corresponding env var ([#4112](https://github.com/badlogic/pi-mono/pull/4112) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+
+### Added
+
+- Added three Xiaomi MiMo Token Plan regional providers visible in `/login`: `xiaomi-token-plan-cn` (`XIAOMI_TOKEN_PLAN_CN_API_KEY`), `xiaomi-token-plan-ams` (`XIAOMI_TOKEN_PLAN_AMS_API_KEY`), `xiaomi-token-plan-sgp` (`XIAOMI_TOKEN_PLAN_SGP_API_KEY`). Each defaults to `mimo-v2.5-pro` ([#4112](https://github.com/badlogic/pi-mono/pull/4112) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+
+### Changed
+
+- Changed `read` tool rendering to collapse Pi documentation, AGENTS/CLAUDE context files, and `SKILL.md` contents by default in interactive output.
+
+### Fixed
+
+- Fixed generated OpenAI-compatible model metadata for Qwen 3.5/3.6 and MiniMax M2.7, so those models work through the built-in provider catalog ([#4110](https://github.com/badlogic/pi-mono/pull/4110) by [@jsynowiec](https://github.com/jsynowiec)).
+- Fixed Bedrock Claude Opus 4.7 `xhigh` thinking requests by preserving the provider's native effort value.
+- Fixed OpenAI Codex WebSocket transport to fall back to SSE when setup fails before streaming starts, and surface transport diagnostics in the assistant message ([#4133](https://github.com/badlogic/pi-mono/issues/4133)).
+- Fixed OpenAI Codex WebSocket transport keeping `--print` and JSON mode processes alive after the response by closing cached WebSocket sessions during session shutdown ([#4103](https://github.com/badlogic/pi-mono/issues/4103)).
+- Fixed compact `read` tool calls to render directly and include selected line ranges in interactive output.
+- Fixed interactive sessions to exit when terminal input is lost instead of continuing in a broken state.
+- Fixed bash tool output to stream incrementally while commands run instead of waiting for command completion ([#4145](https://github.com/badlogic/pi-mono/issues/4145)).
+- Fixed selector and autocomplete fuzzy ranking to prioritize exact matches.
+
+## [0.72.1] - 2026-05-02
+
+## [0.72.0] - 2026-05-01
+
+### New Features
+
+- **Xiaomi MiMo Token Plan provider** - New Anthropic-compatible provider with `XIAOMI_API_KEY` auth, default model (`mimo-v2.5-pro`), and `/login` display. See [docs/providers.md](docs/providers.md). ([#4005](https://github.com/badlogic/pi-mono/pull/4005) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+- **Model thinking level metadata** - Models can now declare which thinking levels they support via `thinkingLevelMap`, replacing the old `reasoningEffortMap`. See [docs/models.md#thinking-level-map](docs/models.md#thinking-level-map) and [docs/custom-provider.md](docs/custom-provider.md). ([#3208](https://github.com/badlogic/pi-mono/issues/3208)).
+- **Custom provider base URL overrides** - `pi.registerProvider()` now respects per-model `baseUrl` settings. See [docs/custom-provider.md](docs/custom-provider.md). ([#4063](https://github.com/badlogic/pi-mono/issues/4063)).
+- **Post-turn stop callback** - Agent loop can now exit gracefully after a completed turn via `shouldStopAfterTurn`. See [`packages/agent/README.md`](https://github.com/badlogic/pi-mono/blob/main/packages/agent/README.md).
+- **Self-update detection fix** - `pi` now correctly identifies and applies available updates. ([#3942](https://github.com/badlogic/pi-mono/issues/3942), [#3980](https://github.com/badlogic/pi-mono/issues/3980), [#3922](https://github.com/badlogic/pi-mono/issues/3922)).
+
+### Breaking Changes
+
+- Replaced `compat.reasoningEffortMap` in `models.json` and `pi.registerProvider()` model definitions with model-level `thinkingLevelMap` ([#3208](https://github.com/badlogic/pi-mono/issues/3208)). Migration: move old mappings from `compat.reasoningEffortMap` to `thinkingLevelMap`. Use string values for provider-specific thinking values and `null` for unsupported pi levels that should be hidden and skipped by cycling. See `docs/models.md#thinking-level-map` and `docs/custom-provider.md`.
+
+### Added
+
+- Added Xiaomi MiMo Token Plan provider support with `XIAOMI_API_KEY`, default model resolution, `/login` display support, and provider documentation ([#4005](https://github.com/badlogic/pi-mono/pull/4005) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+- Added model-level `thinkingLevelMap` support in `models.json` and `pi.registerProvider()`, allowing models to expose only the thinking levels they actually support ([#3208](https://github.com/badlogic/pi-mono/issues/3208)).
+- Added `shouldStopAfterTurn` agent loop callback for post-turn stop control, inherited from `@mariozechner/pi-agent-core`. See [`packages/agent/README.md`](https://github.com/badlogic/pi-mono/blob/main/packages/agent/README.md).
+
+### Fixed
+
+- Fixed the default transport setting to use `auto`, allowing OpenAI Codex to use cached WebSocket context when available ([#4083](https://github.com/badlogic/pi-mono/issues/4083)).
+- Fixed `pi.registerProvider()` to honor per-model `baseUrl` overrides ([#4063](https://github.com/badlogic/pi-mono/issues/4063)).
+- Fixed self-update detection so `pi` correctly identifies when a newer version is available and applies updates ([#3942](https://github.com/badlogic/pi-mono/issues/3942), [#3980](https://github.com/badlogic/pi-mono/issues/3980), [#3922](https://github.com/badlogic/pi-mono/issues/3922)).
+
 ## [0.71.1] - 2026-05-01
 
 ### Added

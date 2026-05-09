@@ -2,11 +2,11 @@
  * Core types for the energy-aware benchmark harness.
  */
 
-import type { AgentTool, EnergyBudget, RuntimePolicy } from "@mariozechner/pi-agent-core";
-import type { Api, Model, TelemetryRecord as ProviderTelemetryRecord } from "@mariozechner/pi-ai";
+import type { AgentTool, EnergyBudget, RuntimePolicy } from "@earendil-works/pi-agent-core";
+import type { Api, Model, TelemetryRecord as ProviderTelemetryRecord } from "@earendil-works/pi-ai";
 
 /** Re-export the provider TelemetryRecord as the canonical schema. */
-export type { TelemetryRecord } from "@mariozechner/pi-ai";
+export type { TelemetryRecord } from "@earendil-works/pi-ai";
 
 /** Extends TelemetryRecord with benchmark-specific mode field. */
 export interface BenchmarkTelemetryRecord extends ProviderTelemetryRecord {

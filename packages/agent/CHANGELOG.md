@@ -21,8 +21,27 @@
 
 ### Integration Notes (openclaw)
 
-- **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. Use `buildAssistantMessage()` from `@mariozechner/pi-ai` instead of object literals.
+- **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. Use `buildAssistantMessage()` from `@earendil-works/pi-ai` instead of object literals.
 - The `onCompact` callback replaces the previous silent ignore of `shouldCompact` — callers should wire this to their existing compaction mechanism.
+
+
+## [0.74.0] - 2026-05-07
+
+## [0.73.1] - 2026-05-07
+
+## [0.73.0] - 2026-05-04
+
+## [0.72.1] - 2026-05-02
+
+### Changed
+
+- Changed the default agent transport to `auto` so providers can use their best available transport by default ([#4083](https://github.com/badlogic/pi-mono/issues/4083)).
+
+## [0.72.0] - 2026-05-01
+
+### Added
+
+- Added `shouldStopAfterTurn` to the low-level agent loop config for gracefully exiting after a completed turn before polling queued messages or starting another LLM call.
 
 ## [0.71.1] - 2026-05-01
 

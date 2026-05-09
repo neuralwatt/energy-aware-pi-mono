@@ -1,4 +1,4 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@mariozechner/pi-ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 
@@ -98,6 +98,37 @@ describe("Agent", () => {
 		unsubscribe();
 		agent.state.systemPrompt = "Another prompt";
 		expect(eventCount).toBe(0); // Should not increase
+	});
+
+	it("emits full lifecycle events for thrown run failures", async () => {
+		const agent = new Agent({
+			streamFn: () => {
+				throw new Error("provider exploded");
+			},
+		});
+		const events: string[] = [];
+		agent.subscribe((event) => {
+			events.push(event.type);
+		});
+
+		await agent.prompt("hello");
+
+		expect(events).toEqual([
+			"agent_start",
+			"turn_start",
+			"message_start",
+			"message_end",
+			"message_start",
+			"message_end",
+			"turn_end",
+			"agent_end",
+		]);
+		const lastMessage = agent.state.messages[agent.state.messages.length - 1];
+		expect(lastMessage?.role).toBe("assistant");
+		if (lastMessage?.role !== "assistant") throw new Error("Expected assistant message");
+		expect(lastMessage.stopReason).toBe("error");
+		expect(lastMessage.errorMessage).toBe("provider exploded");
+		expect(agent.state.errorMessage).toBe("provider exploded");
 	});
 
 	it("should await async subscribers before prompt resolves", async () => {

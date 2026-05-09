@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@mariozechner/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "./types.js";
 
 const REASONING_LEVELS: readonly ThinkingLevel[] = ["high", "medium", "low", "minimal"];

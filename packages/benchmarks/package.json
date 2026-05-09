@@ -1,5 +1,5 @@
 {
-	"name": "@mariozechner/pi-benchmarks",
+	"name": "@earendil-works/pi-benchmarks",
 	"version": "0.53.0",
 	"description": "Energy-aware benchmark harness for pi-mono",
 	"type": "module",
@@ -15,8 +15,8 @@
 		"demo:compare": "npx tsx src/demos/model-compare.ts"
 	},
 	"dependencies": {
-		"@mariozechner/pi-agent-core": "npm:@neuralwatt/pi-agent-core@*",
-		"@mariozechner/pi-ai": "npm:@neuralwatt/pi-ai@*"
+		"@earendil-works/pi-agent-core": "npm:@neuralwatt/pi-agent-core@*",
+		"@earendil-works/pi-ai": "npm:@neuralwatt/pi-ai@*"
 	},
 	"keywords": [
 		"benchmark",

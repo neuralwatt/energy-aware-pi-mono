@@ -1,4 +1,4 @@
-import type { Model, ThinkingLevel } from "@mariozechner/pi-ai";
+import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
 
 export interface EnergyBudget {
 	energy_budget_joules?: number;

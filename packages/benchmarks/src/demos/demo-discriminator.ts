@@ -18,7 +18,7 @@
  * tuned to its classification task.
  */
 
-import { completeSimple, type Model, type ModelCapability } from "@mariozechner/pi-ai";
+import { completeSimple, type Model, type ModelCapability } from "@earendil-works/pi-ai";
 
 // -- Types --------------------------------------------------------------------
 

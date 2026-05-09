@@ -367,6 +367,26 @@ describe("AI Providers Empty Message Tests", () => {
 		});
 	});
 
+	describe.skipIf(!process.env.TOGETHER_API_KEY)("Together AI Provider Empty Messages", () => {
+		const llm = getModel("together", "moonshotai/Kimi-K2.6");
+
+		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyMessage(llm);
+		});
+
+		it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyStringMessage(llm);
+		});
+
+		it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+			await testWhitespaceOnlyMessage(llm);
+		});
+
+		it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyAssistantMessage(llm);
+		});
+	});
+
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider Empty Messages", () => {
 		const llm = getModel("zai", "glm-4.5-air");
 
@@ -426,6 +446,95 @@ describe("AI Providers Empty Message Tests", () => {
 			await testEmptyAssistantMessage(llm);
 		});
 	});
+
+	describe.skipIf(!process.env.XIAOMI_API_KEY)("Xiaomi MiMo (API billing) Provider Empty Messages", () => {
+		const llm = getModel("xiaomi", "mimo-v2.5-pro");
+
+		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyMessage(llm);
+		});
+
+		it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyStringMessage(llm);
+		});
+
+		it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+			await testWhitespaceOnlyMessage(llm);
+		});
+
+		it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+			await testEmptyAssistantMessage(llm);
+		});
+	});
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_CN_API_KEY)(
+		"Xiaomi MiMo Token Plan (CN) Provider Empty Messages",
+		() => {
+			const llm = getModel("xiaomi-token-plan-cn", "mimo-v2.5-pro");
+
+			it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyMessage(llm);
+			});
+
+			it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyStringMessage(llm);
+			});
+
+			it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+				await testWhitespaceOnlyMessage(llm);
+			});
+
+			it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyAssistantMessage(llm);
+			});
+		},
+	);
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_AMS_API_KEY)(
+		"Xiaomi MiMo Token Plan (AMS) Provider Empty Messages",
+		() => {
+			const llm = getModel("xiaomi-token-plan-ams", "mimo-v2.5-pro");
+
+			it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyMessage(llm);
+			});
+
+			it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyStringMessage(llm);
+			});
+
+			it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+				await testWhitespaceOnlyMessage(llm);
+			});
+
+			it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyAssistantMessage(llm);
+			});
+		},
+	);
+
+	describe.skipIf(!process.env.XIAOMI_TOKEN_PLAN_SGP_API_KEY)(
+		"Xiaomi MiMo Token Plan (SGP) Provider Empty Messages",
+		() => {
+			const llm = getModel("xiaomi-token-plan-sgp", "mimo-v2.5-pro");
+
+			it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyMessage(llm);
+			});
+
+			it("should handle empty string content", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyStringMessage(llm);
+			});
+
+			it("should handle whitespace-only content", { retry: 3, timeout: 30000 }, async () => {
+				await testWhitespaceOnlyMessage(llm);
+			});
+
+			it("should handle empty assistant message in conversation", { retry: 3, timeout: 30000 }, async () => {
+				await testEmptyAssistantMessage(llm);
+			});
+		},
+	);
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding Provider Empty Messages", () => {
 		const llm = getModel("kimi-coding", "kimi-k2-thinking");

@@ -59,9 +59,9 @@ export NEURALWATT_API_KEY="your-key-here"
 ```
 
 ```typescript
-import { createAgentSession } from "@mariozechner/pi-coding-agent";
-import { EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
+import { EnergyAwarePolicy } from "@earendil-works/pi-agent-core";
+import { getModel } from "@earendil-works/pi-ai";
 
 const { session } = await createAgentSession({
    model: getModel("neuralwatt", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
@@ -77,16 +77,16 @@ const { session } = await createAgentSession({
 
 See [ENERGY_AWARENESS.md](ENERGY_AWARENESS.md) for the full implementation reference.
 
-## Packages
+## All Packages
 
 | Package | Description |
 |---------|-------------|
-| **[@mariozechner/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@mariozechner/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[@mariozechner/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
-| **[@mariozechner/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
-| **[@mariozechner/pi-web-ui](packages/web-ui)** | Web components for AI chat interfaces |
-| **[@mariozechner/pi-benchmarks](packages/benchmarks)** | Energy-aware benchmark runner and demos (fork-only) |
+| **[@earendil-works/pi-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
+| **[@earendil-works/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
+| **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
+| **[@earendil-works/pi-web-ui](packages/web-ui)** | Web components for AI chat interfaces |
+| **[@earendil-works/pi-benchmarks](packages/benchmarks)** | Energy-aware benchmark runner and demos (fork-only) |
 
 ## Contributing
 

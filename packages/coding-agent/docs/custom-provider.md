@@ -30,7 +30,7 @@ See these complete provider examples:
 ## Quick Reference
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   // Override baseUrl for existing provider
@@ -96,7 +96,7 @@ To add a completely new provider, specify `models` along with the required confi
 If the model list comes from a remote endpoint, use an async extension factory:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default async function (pi: ExtensionAPI) {
   const response = await fetch("http://localhost:1234/v1/models");
@@ -201,31 +201,32 @@ The `api` field determines which streaming implementation is used:
 | `google-vertex` | Google Vertex AI API |
 | `bedrock-converse-stream` | Amazon Bedrock Converse API |
 
-Most OpenAI-compatible providers work with `openai-completions`. Use `compat` for quirks:
+Most OpenAI-compatible providers work with `openai-completions`. Use model-level `thinkingLevelMap` for model-specific thinking levels, and `compat` for provider quirks:
 
 ```typescript
 models: [{
   id: "custom-model",
   // ...
+  reasoning: true,
+  thinkingLevelMap: {              // map pi levels to provider values; null hides unsupported levels
+    minimal: null,
+    low: null,
+    medium: null,
+    high: "default",
+    xhigh: "max"
+  },
   compat: {
-    supportsDeveloperRole: false,      // use "system" instead of "developer"
+    supportsDeveloperRole: false,   // use "system" instead of "developer"
     supportsReasoningEffort: true,
-    reasoningEffortMap: {              // map pi-ai levels to provider values
-      minimal: "default",
-      low: "default",
-      medium: "default",
-      high: "default",
-      xhigh: "default"
-    },
-      maxTokensField: "max_tokens",      // instead of "max_completion_tokens"
-      requiresToolResultName: true,      // tool results need name field
-      thinkingFormat: "qwen",           // top-level enable_thinking: true
-      cacheControlFormat: "anthropic"   // Anthropic-style cache_control markers
-    }
-  }]
+    maxTokensField: "max_tokens",   // instead of "max_completion_tokens"
+    requiresToolResultName: true,   // tool results need name field
+    thinkingFormat: "qwen",        // top-level enable_thinking: true
+    cacheControlFormat: "anthropic" // Anthropic-style cache_control markers
+  }
+}]
 ```
 
-Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+Use `openrouter` for OpenRouter-style `reasoning: { effort }` controls. Use `together` for Together-style `reasoning: { enabled }` controls; with `supportsReasoningEffort`, it also sends `reasoning_effort`. Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
 Use `cacheControlFormat: "anthropic"` for OpenAI-compatible providers that expose Anthropic-style prompt caching via `cache_control` on the system prompt, last tool definition, and last user/assistant text content.
 
 > Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
@@ -251,7 +252,7 @@ pi.registerProvider("custom-api", {
 Add OAuth/SSO authentication that integrates with `/login`:
 
 ```typescript
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@mariozechner/pi-ai";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 
 pi.registerProvider("corporate-ai", {
   baseUrl: "https://ai.corp.com/v1",
@@ -344,12 +345,12 @@ interface OAuthCredentials {
 For providers with non-standard APIs, implement `streamSimple`. Study the existing provider implementations before writing your own:
 
 **Reference implementations:**
-- [anthropic.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) - Anthropic Messages API
-- [mistral.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/mistral.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) - OpenAI Responses API
-- [google.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google.ts) - Google Generative AI
-- [amazon-bedrock.ts](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/amazon-bedrock.ts) - AWS Bedrock
+- [anthropic.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) - Anthropic Messages API
+- [mistral.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/mistral.ts) - Mistral Conversations API
+- [openai-completions.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/openai-completions.ts) - OpenAI Chat Completions
+- [openai-responses.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) - OpenAI Responses API
+- [google.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/google.ts) - Google Generative AI
+- [amazon-bedrock.ts](https://github.com/earendil-works/pi-mono/blob/main/packages/ai/src/providers/amazon-bedrock.ts) - AWS Bedrock
 
 ### Stream Pattern
 
@@ -364,7 +365,7 @@ import {
   type SimpleStreamOptions,
   calculateCost,
   createAssistantMessageEventStream,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 function streamMyProvider(
   model: Model<any>,
@@ -521,7 +522,7 @@ pi.registerProvider("my-provider", {
 
 ## Testing Your Implementation
 
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/badlogic/pi-mono/tree/main/packages/ai/test):
+Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/earendil-works/pi-mono/tree/main/packages/ai/test):
 
 | Test | Purpose |
 |------|---------|
@@ -595,8 +596,14 @@ interface ProviderModelConfig {
   /** API type override for this specific model. */
   api?: Api;
 
+  /** API endpoint URL override for this specific model. */
+  baseUrl?: string;
+
   /** Whether the model supports extended thinking. */
   reasoning: boolean;
+
+  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+  thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", string | null>>;
 
   /** Supported input types. */
   input: ("text" | "image")[];
@@ -623,18 +630,17 @@ interface ProviderModelConfig {
     supportsStore?: boolean;
     supportsDeveloperRole?: boolean;
     supportsReasoningEffort?: boolean;
-    reasoningEffortMap?: Partial<Record<"minimal" | "low" | "medium" | "high" | "xhigh", string>>;
     supportsUsageInStreaming?: boolean;
     maxTokensField?: "max_completion_tokens" | "max_tokens";
     requiresToolResultName?: boolean;
     requiresAssistantAfterToolResult?: boolean;
     requiresThinkingAsText?: boolean;
     requiresReasoningContentOnAssistantMessages?: boolean;
-    thinkingFormat?: "openai" | "deepseek" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "zai" | "qwen" | "qwen-chat-template";
     cacheControlFormat?: "anthropic";
   };
 }
 ```
 
-`deepseek` sends `thinking: { type: "enabled" | "disabled" }` and `reasoning_effort` when enabled. `qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+`openrouter` sends `reasoning: { effort }`. `deepseek` sends `thinking: { type: "enabled" | "disabled" }` and `reasoning_effort` when enabled. `together` sends `reasoning: { enabled }` and also `reasoning_effort` when `supportsReasoningEffort` is enabled. `qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
 `cacheControlFormat: "anthropic"` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content.

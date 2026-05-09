@@ -1,4 +1,4 @@
-import type { Transport } from "@mariozechner/pi-ai";
+import type { Transport } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
@@ -78,7 +78,7 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	transport?: TransportSetting; // default: "sse"
+	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
@@ -656,7 +656,7 @@ export class SettingsManager {
 	}
 
 	getTransport(): TransportSetting {
-		return this.settings.transport ?? "sse";
+		return this.settings.transport ?? "auto";
 	}
 
 	setTransport(transport: TransportSetting): void {

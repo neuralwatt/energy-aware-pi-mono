@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { type DiscriminatorConfig, discriminate } from "../src/demos/demo-discriminator.js";
 
@@ -42,11 +42,11 @@ function minimalConfig(): DiscriminatorConfig {
 
 // ─── Mock pi-ai ───────────────────────────────────────────────────────────────
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
 	completeSimple: vi.fn(),
 }));
 
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai";
 
 function mockClassifierResponse(tier: string, length = "full", reason = "test") {
 	(completeSimple as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

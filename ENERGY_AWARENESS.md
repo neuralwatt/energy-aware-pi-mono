@@ -94,9 +94,9 @@ export NEURALWATT_API_KEY="your-key-here"
 **Step 2: Create an energy-aware session** (3 lines of config)
 
 ```typescript
-import { createAgentSession } from "@mariozechner/pi-coding-agent";
-import { EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
+import { EnergyAwarePolicy } from "@earendil-works/pi-agent-core";
+import { getModel } from "@earendil-works/pi-ai";
 
 const { session } = await createAgentSession({
    model: getModel("neuralwatt", "mistralai/Devstral-Small-2-24B-Instruct-2512"),
@@ -143,7 +143,7 @@ npm run demo:coding -w packages/benchmarks
 If you're using the `Agent` class directly instead of `createAgentSession`:
 
 ```typescript
-import { Agent, EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+import { Agent, EnergyAwarePolicy } from "@earendil-works/pi-agent-core";
 
 const agent = new Agent({
    initialState: { model, thinkingLevel: "high", ... },
@@ -156,7 +156,7 @@ const agent = new Agent({
 Or at the lowest level with `agentLoop()`:
 
 ```typescript
-import { agentLoop } from "@mariozechner/pi-agent-core";
+import { agentLoop } from "@earendil-works/pi-agent-core";
 
 const stream = agentLoop(prompts, context, {
    model,
@@ -173,7 +173,7 @@ const stream = agentLoop(prompts, context, {
 Implement `RuntimePolicy` to create your own policy:
 
 ```typescript
-import type { RuntimePolicy, PolicyContext, PolicyDecision, UsageWithEnergy } from "@mariozechner/pi-agent-core";
+import type { RuntimePolicy, PolicyContext, PolicyDecision, UsageWithEnergy } from "@earendil-works/pi-agent-core";
 
 const myPolicy: RuntimePolicy = {
    name: "my-custom-policy",
@@ -362,8 +362,8 @@ interface RuntimePolicy {
 }
 ```
 
-All policy types are exported from `@mariozechner/pi-agent-core` and
-re-exported from `@mariozechner/pi-coding-agent`.
+All policy types are exported from `@earendil-works/pi-agent-core` and
+re-exported from `@earendil-works/pi-coding-agent`.
 
 ---
 
@@ -657,8 +657,8 @@ interface CreateAgentSessionOptions {
 **Re-exports** from pi-coding-agent (so consumers can import from one place):
 
 ```typescript
-export type { EnergyBudget, RuntimePolicy } from "@mariozechner/pi-agent-core";
-export type { EnergyUsage } from "@mariozechner/pi-ai";
+export type { EnergyBudget, RuntimePolicy } from "@earendil-works/pi-agent-core";
+export type { EnergyUsage } from "@earendil-works/pi-ai";
 ```
 
 ### Usage Example
@@ -667,9 +667,9 @@ export type { EnergyUsage } from "@mariozechner/pi-ai";
 import {
    createAgentSession,
    type EnergyBudget,
-} from "@mariozechner/pi-coding-agent";
-import { EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-coding-agent";
+import { EnergyAwarePolicy } from "@earendil-works/pi-agent-core";
+import { getModel } from "@earendil-works/pi-ai";
 
 // Gather Neuralwatt models sorted by output cost
 const availableModels = [

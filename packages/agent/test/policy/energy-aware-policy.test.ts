@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { EnergyAwarePolicy } from "../../src/policy/energy-aware-policy.js";
 import type { PolicyContext, PolicyDecision, UsageWithEnergy } from "../../src/policy/types.js";

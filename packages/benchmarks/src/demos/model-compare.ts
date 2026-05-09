@@ -29,7 +29,7 @@ import {
 	type Message,
 	type Model,
 	registerBuiltInApiProviders,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 // -- Models -------------------------------------------------------------------
 

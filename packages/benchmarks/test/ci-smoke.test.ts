@@ -4,8 +4,8 @@
  * Fails if the runner crashes or produces invalid output.
  */
 
-import type { RuntimePolicy } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { RuntimePolicy } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { runSuite, runTask } from "../src/runner.js";
 import { BENCHMARK_TASKS, getTasksByGlob } from "../src/tasks.js";

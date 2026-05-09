@@ -12,10 +12,83 @@
 - Added automatic energy metric parsing from OpenAI-compatible streaming responses (Neuralwatt and any provider including energy fields in usage).
 - Added `TelemetryRecord` interface and JSONL serialization/parsing utilities in `energy-types.ts` for structured telemetry logging.
 - Added `buildAssistantMessage()` factory function — constructs `AssistantMessage` with all current fields including `energy`. Downstream consumers should use this instead of object literals to stay forward-compatible as the type evolves.
+- Added Together AI as a built-in OpenAI-compatible provider with generated model metadata and `TOGETHER_API_KEY` authentication ([#3624](https://github.com/earendil-works/pi-mono/pull/3624) by [@Nutlope](https://github.com/Nutlope)).
+
+### Fixed
+
+- Fixed OpenAI Responses requests for models that support disabling reasoning to send `reasoning.effort: "none"` when thinking is off.
 
 ### Integration Notes (openclaw)
 
 - **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. openclaw's `buildAssistantMessage()` in `stream-message-shared.ts` is affected — it explicitly constructs objects with fixed fields and drops `energy`.
+
+
+### Added
+
+- Added Together AI as a built-in OpenAI-compatible provider with generated model metadata and `TOGETHER_API_KEY` authentication ([#3624](https://github.com/earendil-works/pi-mono/pull/3624) by [@Nutlope](https://github.com/Nutlope)).
+
+### Fixed
+
+- Fixed OpenAI Responses requests for models that support disabling reasoning to send `reasoning.effort: "none"` when thinking is off.
+
+## [0.74.0] - 2026-05-07
+
+## [0.73.1] - 2026-05-07
+
+### Added
+
+- Added OAuth login flow metadata so clients can present interactive provider choices during login ([#4190](https://github.com/earendil-works/pi-mono/pull/4190) by [@mitsuhiko](https://github.com/mitsuhiko)).
+
+### Fixed
+
+- Fixed OpenAI Responses reasoning text streaming for LM Studio and other compatible providers that emit `response.reasoning_text.delta` events ([#4191](https://github.com/badlogic/pi-mono/pull/4191) by [@yaanfpv](https://github.com/yaanfpv)).
+- Fixed OpenAI Codex OAuth refresh failures writing directly to stderr while the TUI is active ([#4141](https://github.com/badlogic/pi-mono/issues/4141)).
+- Fixed OpenAI-compatible chat completion streams that interleave content and tool-call deltas in the same choice.
+- Fixed the Kimi K2 P6 model alias to normalize to `kimi-for-coding` ([#4218](https://github.com/earendil-works/pi-mono/issues/4218)).
+- Fixed OpenAI Codex Responses requests to send a non-empty system prompt ([#4184](https://github.com/earendil-works/pi-mono/issues/4184)).
+
+## [0.73.0] - 2026-05-04
+
+### Breaking Changes
+
+- Switched the built-in `xiaomi` provider endpoint from Token Plan AMS (`https://token-plan-ams.xiaomimimo.com/anthropic`) to API billing (`https://api.xiaomimimo.com/anthropic`). `XIAOMI_API_KEY` now refers to the API billing key from [platform.xiaomimimo.com](https://platform.xiaomimimo.com). Users still on Token Plan must move to the appropriate `xiaomi-token-plan-*` provider and set the corresponding env var ([#4112](https://github.com/badlogic/pi-mono/pull/4112) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+
+### Added
+
+- Added Xiaomi MiMo Token Plan regional providers with per-region env vars: `xiaomi-token-plan-cn` (`XIAOMI_TOKEN_PLAN_CN_API_KEY`), `xiaomi-token-plan-ams` (`XIAOMI_TOKEN_PLAN_AMS_API_KEY`), and `xiaomi-token-plan-sgp` (`XIAOMI_TOKEN_PLAN_SGP_API_KEY`) ([#4112](https://github.com/badlogic/pi-mono/pull/4112) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+- Added `registerSessionResourceCleanup()` and `cleanupSessionResources()` so providers can register cleanup hooks for session-scoped resources.
+
+### Fixed
+
+- Fixed generated OpenAI-compatible model metadata for Qwen 3.5/3.6 and MiniMax M2.7 to match models.dev and OpenCode Go ([#4110](https://github.com/badlogic/pi-mono/pull/4110) by [@jsynowiec](https://github.com/jsynowiec)).
+- Fixed Bedrock Converse thinking effort mapping to preserve native `xhigh` for Claude Opus 4.7.
+- Fixed OpenAI Codex Responses WebSocket transport to fall back to SSE when setup fails before streaming starts, and attach transport diagnostics to the assistant message ([#4133](https://github.com/badlogic/pi-mono/issues/4133)).
+
+## [0.72.1] - 2026-05-02
+
+## [0.72.0] - 2026-05-01
+
+### Breaking Changes
+
+- Replaced `OpenAICompletionsCompat.reasoningEffortMap` with top-level `Model.thinkingLevelMap` for model-specific thinking controls ([#3208](https://github.com/badlogic/pi-mono/issues/3208)). Migration: move mappings from `model.compat.reasoningEffortMap` to `model.thinkingLevelMap`. See `packages/ai/README.md#custom-models` and `packages/coding-agent/docs/models.md#thinking-level-map`. Map values keep the same provider-specific string semantics, and `null` marks a pi thinking level unsupported. Example:
+  ```ts
+  // Before
+  compat: { reasoningEffortMap: { high: "high", xhigh: "max" } }
+
+  // After
+  thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" }
+  ```
+- Removed `supportsXhigh()`. Migration: use `getSupportedThinkingLevels(model).includes("xhigh")` or `clampThinkingLevel(model, requestedLevel)` instead ([#3208](https://github.com/badlogic/pi-mono/issues/3208)).
+
+### Added
+
+- Added Xiaomi MiMo Token Plan provider (Anthropic-compatible) with `XIAOMI_API_KEY` authentication ([#4005](https://github.com/badlogic/pi-mono/pull/4005) by [@Phoen1xCode](https://github.com/Phoen1xCode)).
+- Added `Model.thinkingLevelMap`, `getSupportedThinkingLevels()`, and `clampThinkingLevel()` so model metadata can describe supported thinking levels and provider-specific level values ([#3208](https://github.com/badlogic/pi-mono/issues/3208)).
+
+### Fixed
+
+- Fixed OpenAI Codex Responses `streamSimple()` to honor the configured transport instead of always using SSE, and made `auto` the default transport with cached WebSocket context when available ([#4083](https://github.com/badlogic/pi-mono/issues/4083)).
+- Fixed Xiaomi MiMo model catalog to use the Token Plan Anthropic endpoint instead of the direct API ([#3912](https://github.com/badlogic/pi-mono/issues/3912)).
 
 ## [0.71.1] - 2026-05-01
 

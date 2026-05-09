@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Transport } from "@mariozechner/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Transport } from "@earendil-works/pi-ai";
 import {
 	Container,
 	getCapabilities,
@@ -10,10 +10,11 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type { WarningSettings } from "../../../core/settings-manager.js";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
+import { keyDisplayText } from "./keybinding-hints.js";
 
 const SETTINGS_SUBMENU_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
@@ -204,6 +205,7 @@ export class SettingsSelectorComponent extends Container {
 		super();
 
 		const supportsImages = getCapabilities().images;
+		const followUpKey = keyDisplayText("app.message.followUp");
 		let currentWarnings = { ...config.warnings };
 
 		const items: SettingItem[] = [
@@ -225,8 +227,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "follow-up-mode",
 				label: "Follow-up mode",
-				description:
-					"Alt+Enter queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.",
+				description: `${followUpKey} queues follow-up messages until agent stops. 'one-at-a-time': deliver one, wait for response. 'all': deliver all at once.`,
 				currentValue: config.followUpMode,
 				values: ["one-at-a-time", "all"],
 			},

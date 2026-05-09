@@ -1,6 +1,6 @@
 {
 	"name": "@neuralwatt/pi-agent-core",
-	"version": "0.71.1",
+	"version": "0.74.0",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -17,8 +17,11 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@mariozechner/pi-ai": "npm:@neuralwatt/pi-ai@^0.71.1",
-		"typebox": "^1.1.24"
+		"@earendil-works/pi-ai": "^0.74.0",
+		"@neuralwatt/pi-ai": "npm:@neuralwatt/pi-ai@^0.74.0",
+		"ignore": "^7.0.5",
+		"typebox": "^1.1.24",
+		"yaml": "^2.8.2"
 	},
 	"keywords": [
 		"ai",
@@ -31,7 +34,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/neuralwatt/energy-aware-pi-mono.git",
 		"directory": "packages/agent"
 	},
 	"engines": {

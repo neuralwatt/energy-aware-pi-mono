@@ -5,9 +5,9 @@ This document tracks the work needed to bring energy awareness features from
 
 ## Background
 
-openclaw depends on 4 pi-mono packages (`@mariozechner/pi-ai`,
-`@mariozechner/pi-agent-core`, `@mariozechner/pi-coding-agent`,
-`@mariozechner/pi-tui`), all at v0.57.1 (published as `@neuralwatt/*`).
+openclaw depends on 4 pi-mono packages (`@earendil-works/pi-ai`,
+`@earendil-works/pi-agent-core`, `@earendil-works/pi-coding-agent`,
+`@earendil-works/pi-tui`), all at v0.57.1 (published as `@neuralwatt/*`).
 
 All energy-aware changes are additive and opt-in — no existing APIs were broken.
 However, openclaw's internal patterns create friction that must be addressed on
@@ -44,7 +44,7 @@ explicit fields and does **not** pass through the `energy` property. The
 discarded.
 
 **Fix:** Add `energy` to the params type and the returned object. Or switch to
-using `buildAssistantMessage()` from `@mariozechner/pi-ai` (exported as P1).
+using `buildAssistantMessage()` from `@earendil-works/pi-ai` (exported as P1).
 
 ```typescript
 // In stream-message-shared.ts buildAssistantMessage():
@@ -121,7 +121,7 @@ the session.
 
 openclaw's plugin SDK does not re-export any pi-ai or pi-agent-core types.
 Plugin authors who want to consume energy data must import directly from
-`@mariozechner/pi-ai` or `@mariozechner/pi-coding-agent`.
+`@earendil-works/pi-ai` or `@earendil-works/pi-coding-agent`.
 
 **Fix:** Re-export `EnergyUsage`, `EnergyBudget`, `RuntimePolicy`,
 `PolicyDecision` from the plugin SDK.

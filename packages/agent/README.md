@@ -1,18 +1,18 @@
-# @mariozechner/pi-agent-core
+# @earendil-works/pi-agent-core
 
-Stateful agent with tool execution and event streaming. Built on `@mariozechner/pi-ai`.
+Stateful agent with tool execution and event streaming. Built on `@earendil-works/pi-ai`.
 
 ## Installation
 
 ```bash
-npm install @mariozechner/pi-agent-core
+npm install @earendil-works/pi-agent-core
 ```
 
 ## Quick Start
 
 ```typescript
-import { Agent } from "@mariozechner/pi-agent-core";
-import { getModel } from "@mariozechner/pi-ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { getModel } from "@earendil-works/pi-ai";
 
 const agent = new Agent({
   initialState: {
@@ -111,6 +111,20 @@ The mode can be set globally via `toolExecution` in the agent config, or per-too
 The `beforeToolCall` hook runs after `tool_execution_start` and validated argument parsing. It can block execution. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
 
 Tools can also return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
+
+Low-level loop callers can set `shouldStopAfterTurn` to stop gracefully after the current turn completes:
+
+```typescript
+const stream = agentLoop(prompts, context, {
+  model,
+  convertToLlm,
+  shouldStopAfterTurn: async ({ message, toolResults, context, newMessages }) => {
+    return shouldCompactBeforeNextTurn(context.messages);
+  },
+});
+```
+
+`shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason.
 
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
@@ -341,7 +355,7 @@ Follow-up messages are checked only when there are no more tool calls and no ste
 Extend `AgentMessage` via declaration merging:
 
 ```typescript
-declare module "@mariozechner/pi-agent-core" {
+declare module "@earendil-works/pi-agent-core" {
   interface CustomAgentMessages {
     notification: { role: "notification"; text: string; timestamp: number };
   }
@@ -422,7 +436,7 @@ Return `terminate: true` from `execute()` or `afterToolCall` to hint that the ag
 For browser apps that proxy through a backend:
 
 ```typescript
-import { Agent, streamProxy } from "@mariozechner/pi-agent-core";
+import { Agent, streamProxy } from "@earendil-works/pi-agent-core";
 
 const agent = new Agent({
   streamFn: (model, context, options) =>
@@ -439,7 +453,7 @@ const agent = new Agent({
 For direct control without the Agent class:
 
 ```typescript
-import { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
+import { agentLoop, agentLoopContinue } from "@earendil-works/pi-agent-core";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",

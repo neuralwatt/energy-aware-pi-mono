@@ -5,7 +5,7 @@ import {
 	type Message,
 	type Model,
 	type UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { agentLoop } from "../../src/agent-loop.js";
 import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "../../src/policy/types.js";

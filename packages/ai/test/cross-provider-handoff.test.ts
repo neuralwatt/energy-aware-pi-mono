@@ -107,12 +107,15 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "groq", model: "openai/gpt-oss-120b", label: "groq-gpt-oss-120b" },
 	// Hugging Face
 	{ provider: "huggingface", model: "moonshotai/Kimi-K2.5", label: "huggingface-kimi-k2.5" },
+	// Together AI
+	{ provider: "together", model: "moonshotai/Kimi-K2.6", label: "together-kimi-k2.6" },
 	// Kimi For Coding
 	{ provider: "kimi-coding", model: "kimi-k2-thinking", label: "kimi-coding-k2-thinking" },
 	// Mistral
 	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
 	// MiniMax
 	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.7" },
+	{ provider: "minimax-cn", model: "MiniMax-M2.7", label: "minimax-m2.7" },
 	// OpenCode Zen
 	{ provider: "opencode", model: "big-pickle", label: "zen-big-pickle" },
 	{ provider: "opencode", model: "claude-sonnet-4-5", label: "zen-claude-sonnet-4-5" },
@@ -123,6 +126,11 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// OpenCode Go
 	{ provider: "opencode-go", model: "kimi-k2.5", label: "go-kimi-k2.5" },
 	{ provider: "opencode-go", model: "minimax-m2.5", label: "go-minimax-m2.5" },
+	// Xiaomi MiMo
+	{ provider: "xiaomi", model: "mimo-v2.5-pro", label: "xiaomi-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-cn", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-cn-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-ams", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-ams-mimo-v2.5-pro" },
+	{ provider: "xiaomi-token-plan-sgp", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-sgp-mimo-v2.5-pro" },
 ];
 
 // Cached context structure

@@ -7,7 +7,7 @@ import {
 	type TextContent,
 	type ThinkingBudgets,
 	type Transport,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import type { EnergyBudget, RuntimePolicy } from "./policy/types.js";
 import type {
@@ -220,7 +220,7 @@ export class Agent {
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
 		this.thinkingBudgets = options.thinkingBudgets;
-		this.transport = options.transport ?? "sse";
+		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
 		this._policy = options.policy;
@@ -529,8 +529,9 @@ export class Agent {
 			errorMessage: error instanceof Error ? error.message : String(error),
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
-		this._state.messages.push(failureMessage);
-		this._state.errorMessage = failureMessage.errorMessage;
+		await this.processEvents({ type: "message_start", message: failureMessage });
+		await this.processEvents({ type: "message_end", message: failureMessage });
+		await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
 		await this.processEvents({ type: "agent_end", messages: [failureMessage] });
 	}
 

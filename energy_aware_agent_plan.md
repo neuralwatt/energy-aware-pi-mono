@@ -128,7 +128,7 @@ Benchmark output compares: **time/task**, **energy/task**, **success rate**
 **Deliverables:**
 - `ENERGY_AWARENESS.md` at repo root — design doc covering baseline vs energy-aware definitions
 - `packages/benchmarks/` scaffold:
-  - `package.json` (name: `@mariozechner/pi-benchmarks`, type: module, vitest scripts)
+  - `package.json` (name: `@earendil-works/pi-benchmarks`, type: module, vitest scripts)
   - `tsconfig.build.json` extending `../../tsconfig.base.json`
   - `vitest.config.ts` (required for `npm test --workspaces` to pick up tests)
   - `src/index.ts`, `src/types.ts` stubs

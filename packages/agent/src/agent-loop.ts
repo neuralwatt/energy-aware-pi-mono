@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { PolicyContext, PolicyDecision, UsageWithEnergy } from "./policy/types.js";
 import type {
 	AgentContext,
@@ -348,6 +348,18 @@ async function runLoop(
 			}
 
 			await emit({ type: "turn_end", message, toolResults });
+
+			if (
+				await config.shouldStopAfterTurn?.({
+					message,
+					toolResults,
+					context: currentContext,
+					newMessages,
+				})
+			) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
 
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
 		}

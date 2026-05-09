@@ -26,15 +26,15 @@ import type {
 	PolicyDecision,
 	RuntimePolicy,
 	UsageWithEnergy,
-} from "@mariozechner/pi-agent-core";
-import { BaselinePolicy, EnergyAwarePolicy } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-agent-core";
+import { BaselinePolicy, EnergyAwarePolicy } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
 	completeSimple,
 	type Message,
 	type Model,
 	registerBuiltInApiProviders,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { type DiscriminatorConfig, discriminate } from "./demo-discriminator.js";
 import {
 	clearMemory,

@@ -1,6 +1,6 @@
 {
-	"name": "@neuralwatt/pi-ai",
-	"version": "0.71.1",
+"name": "@neuralwatt/pi-ai",
+	"version": "0.74.0",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -61,7 +61,8 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"generate-models": "npx tsx scripts/generate-models.ts",
-		"build": "npm run generate-models && tsgo -p tsconfig.build.json",
+		"generate-image-models": "npx tsx scripts/generate-image-models.ts",
+		"build": "npm run generate-models && npm run generate-image-models && tsgo -p tsconfig.build.json",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"dev:tsc": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"test": "vitest --run",
@@ -94,7 +95,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/badlogic/pi-mono.git",
+		"url": "git+https://github.com/earendil-works/pi-mono.git",
 		"directory": "packages/ai"
 	},
 	"engines": {
