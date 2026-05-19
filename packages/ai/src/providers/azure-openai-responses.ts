@@ -13,6 +13,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -38,6 +39,22 @@ function resolveDeploymentName(model: Model<"azure-openai-responses">, options?:
 	}
 	const mappedDeployment = parseDeploymentNameMap(process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id);
 	return mappedDeployment || model.id;
+}
+
+function formatAzureOpenAIError(error: unknown): string {
+	if (error instanceof Error) {
+		const status = (error as Error & { status?: unknown }).status;
+		const statusCode = typeof status === "number" ? status : undefined;
+		if (statusCode !== undefined) {
+			return `Azure OpenAI API error (${statusCode}): ${error.message}`;
+		}
+		return error.message;
+	}
+	try {
+		return JSON.stringify(error);
+	} catch {
+		return String(error);
+	}
 }
 
 // Azure OpenAI Responses-specific options
@@ -119,7 +136,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = formatAzureOpenAIError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -245,7 +262,7 @@ function buildParams(
 		model: deploymentName,
 		input: messages,
 		stream: true,
-		prompt_cache_key: options?.sessionId,
+		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
 	};
 
 	if (options?.maxTokens) {

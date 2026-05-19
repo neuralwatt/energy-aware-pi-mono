@@ -5,8 +5,8 @@
  * and after compaction the session is reloaded.
  */
 
-import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
@@ -523,6 +523,34 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
+function createSummarizationOptions(
+	model: Model<any>,
+	maxTokens: number,
+	apiKey: string | undefined,
+	headers: Record<string, string> | undefined,
+	signal: AbortSignal | undefined,
+	thinkingLevel: ThinkingLevel | undefined,
+): SimpleStreamOptions {
+	const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
+	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
+		options.reasoning = thinkingLevel;
+	}
+	return options;
+}
+
+async function completeSummarization(
+	model: Model<any>,
+	context: Context,
+	options: SimpleStreamOptions,
+	streamFn?: StreamFn,
+): Promise<AssistantMessage> {
+	if (!streamFn) {
+		return completeSimple(model, context, options);
+	}
+	const stream = await streamFn(model, context, options);
+	return stream.result();
+}
+
 /**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
@@ -531,14 +559,18 @@ export async function generateSummary(
 	currentMessages: AgentMessage[],
 	model: Model<any>,
 	reserveTokens: number,
-	apiKey: string,
+	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
+	streamFn?: StreamFn,
 ): Promise<string> {
-	const maxTokens = Math.floor(0.8 * reserveTokens);
+	const maxTokens = Math.min(
+		Math.floor(0.8 * reserveTokens),
+		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+	);
 
 	// Use update prompt if we have a previous summary, otherwise initial prompt
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
@@ -566,15 +598,13 @@ export async function generateSummary(
 		},
 	];
 
-	const completionOptions =
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-			: { maxTokens, signal, apiKey, headers };
+	const completionOptions = createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel);
 
-	const response = await completeSimple(
+	const response = await completeSummarization(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
 		completionOptions,
+		streamFn,
 	);
 
 	if (response.stopReason === "error") {
@@ -717,11 +747,12 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 export async function compact(
 	preparation: CompactionPreparation,
 	model: Model<any>,
-	apiKey: string,
+	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	customInstructions?: string,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	streamFn?: StreamFn,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -751,6 +782,7 @@ export async function compact(
 						customInstructions,
 						previousSummary,
 						thinkingLevel,
+						streamFn,
 					)
 				: Promise.resolve("No prior history."),
 			generateTurnPrefixSummary(
@@ -761,6 +793,7 @@ export async function compact(
 				headers,
 				signal,
 				thinkingLevel,
+				streamFn,
 			),
 		]);
 		// Merge into single summary
@@ -777,6 +810,7 @@ export async function compact(
 			customInstructions,
 			previousSummary,
 			thinkingLevel,
+			streamFn,
 		);
 	}
 
@@ -803,12 +837,16 @@ async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model<any>,
 	reserveTokens: number,
-	apiKey: string,
+	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	streamFn?: StreamFn,
 ): Promise<string> {
-	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
+	const maxTokens = Math.min(
+		Math.floor(0.5 * reserveTokens),
+		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+	); // Smaller budget for turn prefix
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -820,12 +858,11 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
-	const response = await completeSimple(
+	const response = await completeSummarization(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-			: { maxTokens, signal, apiKey, headers },
+		createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+		streamFn,
 	);
 
 	if (response.stopReason === "error") {

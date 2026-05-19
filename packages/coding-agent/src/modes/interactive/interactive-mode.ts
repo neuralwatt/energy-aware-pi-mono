@@ -91,7 +91,7 @@ import { getCwdRelativePath } from "../../utils/paths.js";
 import { getPiUserAgent } from "../../utils/pi-user-agent.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { ensureTool } from "../../utils/tools-manager.js";
-import { checkForNewPiVersion } from "../../utils/version-check.js";
+import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.js";
 import { ArminComponent } from "./components/armin.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
@@ -572,6 +572,21 @@ export class InteractiveMode {
 		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
 		this.fdPath = fdPath;
 
+		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
+			const modelList = this.session.scopedModels
+				.map((sm) => {
+					const thinkingStr = sm.thinkingLevel ? `:${sm.thinkingLevel}` : "";
+					return `${sm.model.id}${thinkingStr}`;
+				})
+				.join(", ");
+			const cycleKeys = this.keybindings.getKeys("app.model.cycleForward");
+			const cycleHint =
+				cycleKeys.length > 0
+					? theme.fg("muted", ` (${formatKeyText(cycleKeys.join("/"), { capitalize: true })} to cycle)`)
+					: "";
+			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
+		}
+
 		// Add header container as first child
 		this.ui.addChild(this.headerContainer);
 
@@ -696,9 +711,9 @@ export class InteractiveMode {
 		await this.init();
 
 		// Start version check asynchronously
-		checkForNewPiVersion(this.version).then((newVersion) => {
-			if (newVersion) {
-				this.showNewVersionNotification(newVersion);
+		checkForNewPiVersion(this.version).then((newRelease) => {
+			if (newRelease) {
+				this.showNewVersionNotification(newRelease);
 			}
 		});
 
@@ -1463,6 +1478,9 @@ export class InteractiveMode {
 		const uiContext = this.createExtensionUIContext();
 		await this.session.bindExtensions({
 			uiContext,
+			abortHandler: () => {
+				this.restoreQueuedMessagesToEditor({ abort: true });
+			},
 			commandContextActions: {
 				waitForIdle: () => this.session.agent.waitForIdle(),
 				newSession: async (options) => {
@@ -1612,7 +1630,9 @@ export class InteractiveMode {
 			model: this.session.model,
 			isIdle: () => !this.session.isStreaming,
 			signal: this.session.agent.signal,
-			abort: () => this.session.abort(),
+			abort: () => {
+				this.restoreQueuedMessagesToEditor({ abort: true });
+			},
 			hasPendingMessages: () => this.session.pendingMessageCount > 0,
 			shutdown: () => {
 				this.shutdownRequested = true;
@@ -2024,7 +2044,7 @@ export class InteractiveMode {
 					this.hideExtensionSelector();
 					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
 			);
 
 			this.editorContainer.clear();
@@ -3245,6 +3265,36 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Last-resort handler for uncaught exceptions. The TUI puts stdin into raw
+	 * mode and hides the cursor; without this handler, an uncaught throw from
+	 * anywhere (e.g. an extension's async `ChildProcess.on("exit")` callback)
+	 * tears down the process while leaving the terminal in raw mode with no
+	 * cursor, requiring `stty sane && reset` to recover.
+	 *
+	 * Unlike emergencyTerminalExit, the terminal is still alive here, so we
+	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
+	 * paste / Kitty / modifyOtherKeys sequences.
+	 */
+	private uncaughtCrash(error: Error): never {
+		if (this.isShuttingDown) {
+			process.exit(1);
+		}
+		this.isShuttingDown = true;
+		try {
+			this.unregisterSignalHandlers();
+		} catch {}
+		try {
+			killTrackedDetachedChildren();
+		} catch {}
+		try {
+			this.ui.stop();
+		} catch {}
+		console.error("pi exiting due to uncaughtException:");
+		console.error(error);
+		process.exit(1);
+	}
+
+	/**
 	 * Check if shutdown was requested and perform shutdown if so.
 	 */
 	private async checkShutdownRequested(): Promise<void> {
@@ -3282,6 +3332,13 @@ export class InteractiveMode {
 		process.stderr.on("error", terminalErrorHandler);
 		this.signalCleanupHandlers.push(() => process.stdout.off("error", terminalErrorHandler));
 		this.signalCleanupHandlers.push(() => process.stderr.off("error", terminalErrorHandler));
+
+		// Restore the terminal before the process dies on any uncaught throw.
+		// Without this, an unhandled exception from extension code (or anywhere
+		// in pi) leaves the terminal in raw mode with no cursor.
+		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
+		process.prependListener("uncaughtException", uncaughtExceptionHandler);
+		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
 	}
 
 	private unregisterSignalHandlers(): void {
@@ -3445,7 +3502,7 @@ export class InteractiveMode {
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 
-	private openExternalEditor(): void {
+	private async openExternalEditor(): Promise<void> {
 		// Determine editor (respect $VISUAL, then $EDITOR)
 		const editorCmd = process.env.VISUAL || process.env.EDITOR;
 		if (!editorCmd) {
@@ -3466,14 +3523,22 @@ export class InteractiveMode {
 			// Split by space to support editor arguments (e.g., "code --wait")
 			const [editor, ...editorArgs] = editorCmd.split(" ");
 
-			// Spawn editor synchronously with inherited stdio for interactive editing
-			const result = spawnSync(editor, [...editorArgs, tmpFile], {
-				stdio: "inherit",
-				shell: process.platform === "win32",
+			process.stdout.write(`Launching external editor: ${editorCmd}\nPi will resume when the editor exits.\n`);
+
+			// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
+			// Node/libuv's console input read active after ui.stop() pauses stdin, racing
+			// vim/nvim for the console input buffer until Ctrl+C cancels the pending read.
+			const status = await new Promise<number | null>((resolve) => {
+				const child = spawn(editor, [...editorArgs, tmpFile], {
+					stdio: "inherit",
+					shell: process.platform === "win32",
+				});
+				child.on("error", () => resolve(null));
+				child.on("close", (code) => resolve(code));
 			});
 
 			// On successful exit (status 0), replace editor content
-			if (result.status === 0) {
+			if (status === 0) {
 				const newContent = fs.readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
 				this.editor.setText(newContent);
 			}
@@ -3505,6 +3570,7 @@ export class InteractiveMode {
 	showError(errorMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
+		this.chatContainer.addChild(new Spacer(1));
 		this.ui.requestRender();
 	}
 
@@ -3514,24 +3580,31 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	showNewVersionNotification(newVersion: string): void {
+	showNewVersionNotification(release: LatestPiRelease): void {
 		const action = theme.fg("accent", `${APP_NAME} update`);
-		const updateInstruction = theme.fg("muted", `New version ${newVersion} is available. Run `) + action;
-		const changelogUrl = "https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md";
+		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
+		const changelogUrl = "https://pi.dev/changelog";
 		const changelogLink = getCapabilities().hyperlinks
 			? hyperlink(theme.fg("accent", "open changelog"), changelogUrl)
 			: theme.fg("accent", changelogUrl);
 		const changelogLine = theme.fg("muted", "Changelog: ") + changelogLink;
+		const note = release.note?.trim();
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
 		this.chatContainer.addChild(
-			new Text(
-				`${theme.bold(theme.fg("warning", "Update Available"))}\n${updateInstruction}\n${changelogLine}`,
-				1,
-				0,
-			),
+			new Text(`${theme.bold(theme.fg("warning", "Update Available"))}\n${updateInstruction}`, 1, 0),
 		);
+		if (note) {
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new Markdown(note, 1, 0, this.getMarkdownThemeWithSettings(), {
+					color: (text) => theme.fg("muted", text),
+				}),
+			);
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		this.chatContainer.addChild(new Text(changelogLine, 1, 0));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
 		this.ui.requestRender();
 	}

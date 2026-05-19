@@ -2,8 +2,50 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible `streamSimple()` requests to stop sending model-derived default output token caps, avoiding context-window reservation failures on servers such as vLLM while preserving explicit `maxTokens` and required Anthropic `max_tokens` handling ([#4675](https://github.com/earendil-works/pi/issues/4675)).
+- Fixed OpenAI prompt cache keys to clamp session-derived values to the 64-character API limit across OpenAI Responses, Chat Completions, Codex Responses, and Azure OpenAI Responses ([#4720](https://github.com/earendil-works/pi/issues/4720)).
+
+## [0.75.3] - 2026-05-18
+
+## [0.75.2] - 2026-05-18
+
+### Fixed
+
+- Fixed Xiaomi MiMo generated model metadata to replay assistant tool-call messages with `reasoning_content` for thinking-mode multi-turn requests ([#4678](https://github.com/earendil-works/pi/issues/4678)).
+
+## [0.75.1] - 2026-05-18
+
+### Fixed
+
+- Fixed Anthropic-compatible API-key requests to ignore unrelated `ANTHROPIC_AUTH_TOKEN` environment values, avoiding invalid bearer credentials for providers such as Xiaomi MiMo ([#4342](https://github.com/earendil-works/pi/issues/4342)).
+- Fixed Amazon Bedrock message conversion to skip unknown content blocks instead of failing the stream ([#4223](https://github.com/earendil-works/pi/issues/4223)).
+- Fixed Azure OpenAI Responses and OpenAI Responses error formatting to prefix HTTP status codes onto `errorMessage`, so transient 5xx and 429 errors are correctly matched by the agent-level auto-retry classifier ([#4232](https://github.com/earendil-works/pi/issues/4232)).
+- Fixed Xiaomi MiMo model metadata to use the OpenAI-compatible endpoints and `openai-completions` API, restoring multi-turn thinking/tool-call sessions ([#4505](https://github.com/earendil-works/pi/issues/4505)).
+- Fixed OpenCode Go Kimi reasoning replay by normalizing streamed `reasoning` fields back to `reasoning_content` for OpenCode Go only ([#4251](https://github.com/earendil-works/pi/issues/4251)).
+
+### Removed
+
+- Removed non-working OpenAI Codex fast model variants.
+
+## [0.75.0] - 2026-05-17
+
+### Breaking Changes
+
+- Raised the minimum supported Node.js version to 22.19.0.
+
+### Fixed
+
+- Fixed OpenAI Codex generated model metadata to use the current upstream model list ([#4603](https://github.com/earendil-works/pi-mono/pull/4603) by [@mattiacerutti](https://github.com/mattiacerutti)).
+- Fixed GitHub Copilot GPT model thinking metadata to map unsupported minimal thinking to low ([#4622](https://github.com/earendil-works/pi-mono/pull/4622) by [@mattiacerutti](https://github.com/mattiacerutti)).
+- Fixed `streamSimple()` defaults for models whose advertised output limit is effectively their full context window to avoid impossible default requests ([#4614](https://github.com/earendil-works/pi/issues/4614)).
+
+## [0.74.1] - 2026-05-16
+
 ### Added
 
+- Added image generation APIs, image model metadata, and built-in OpenRouter image generation support ([#3887](https://github.com/earendil-works/pi-mono/pull/3887) by [@cristinaponcela](https://github.com/cristinaponcela)).
 - Added Neuralwatt as a new provider (`"neuralwatt"`) using OpenAI-compatible completions API with base URL `https://api.neuralwatt.com/v1`.
 - Replaced placeholder Neuralwatt models with 7 real models from the NeuralWatt API: Devstral 24B, GPT-OSS 20B, Kimi K2.5, MiniMax M2.5, Qwen3.5 397B, Qwen3.5 35B, and GLM-5. All models include `capabilities: ["tool_calling"]` and updated pricing/context windows from portal.neuralwatt.com.
 - Added `NEURALWATT_API_KEY` environment variable detection for Neuralwatt provider authentication.
@@ -17,19 +59,25 @@
 ### Fixed
 
 - Fixed OpenAI Responses requests for models that support disabling reasoning to send `reasoning.effort: "none"` when thinking is off.
-
-### Integration Notes (openclaw)
-
 - **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. openclaw's `buildAssistantMessage()` in `stream-message-shared.ts` is affected — it explicitly constructs objects with fixed fields and drops `energy`.
-
-
-### Added
-
+- Added image generation APIs, image model metadata, and built-in OpenRouter image generation support ([#3887](https://github.com/earendil-works/pi-mono/pull/3887) by [@cristinaponcela](https://github.com/cristinaponcela)).
 - Added Together AI as a built-in OpenAI-compatible provider with generated model metadata and `TOGETHER_API_KEY` authentication ([#3624](https://github.com/earendil-works/pi-mono/pull/3624) by [@Nutlope](https://github.com/Nutlope)).
 
 ### Fixed
 
+- Fixed GitHub Copilot model availability to ignore generic `GH_TOKEN` and `GITHUB_TOKEN` environment variables, requiring OAuth login or `COPILOT_GITHUB_TOKEN` instead ([#4485](https://github.com/earendil-works/pi/issues/4485)).
+- Fixed `openai-completions` streams to surface an error when the stream ends before any terminal `finish_reason`, so truncated responses can retry instead of being accepted as success ([#4345](https://github.com/earendil-works/pi/issues/4345)).
+- Fixed Fireworks provider caching compatibility by adding session affinity headers and model metadata compat settings ([#4358](https://github.com/earendil-works/pi-mono/pull/4358) by [@yanirz](https://github.com/yanirz)).
+- Fixed OpenAI Codex WebSocket transport to respect proxy environment variables under Bun ([#4354](https://github.com/earendil-works/pi-mono/pull/4354) by [@haoqixu](https://github.com/haoqixu)).
+- Fixed OpenRouter cache usage normalization to preserve cached-token semantics without treating cached tokens as cache writes.
+- Fixed Bedrock proxy handling to preserve `NO_PROXY` exclusions while using HTTP(S)-only proxy agents.
+- Fixed compiled Bun binaries failing to start outside the repo when Bedrock proxy support tried to resolve `proxy-from-env` from external `node_modules` ([#4513](https://github.com/earendil-works/pi/issues/4513)).
+- Fixed GitHub Copilot Claude test coverage to use the current Claude Sonnet 4.6 model ID.
 - Fixed OpenAI Responses requests for models that support disabling reasoning to send `reasoning.effort: "none"` when thinking is off.
+- Fixed Inception Mercury 2 tool calling on OpenRouter by marking `off` as unsupported in `thinkingLevelMap`, so the openai-completions provider omits the reasoning param instead of defaulting to `{reasoning:{effort:"none"}}` (which puts Mercury 2 in instant mode, disabling tool calls).
+- Fixed OpenAI Codex SSE retries to honor `retry-after-ms` and `retry-after` headers before falling back to exponential backoff.
+- Fixed context overflow detection for LiteLLM-wrapped OpenAI-compatible errors using `exceeds the model's maximum context length of ... tokens` wording ([#4563](https://github.com/earendil-works/pi/issues/4563)).
+- Fixed `streamSimple()` defaults to respect model output limits above 32000 tokens instead of clamping provider requests to 32000 ([#4539](https://github.com/earendil-works/pi/issues/4539)).
 
 ## [0.74.0] - 2026-05-07
 

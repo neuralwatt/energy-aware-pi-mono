@@ -106,7 +106,7 @@ describe("responseId E2E Tests", () => {
 			"Anthropic path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "claude-sonnet-4");
+				const llm = getModel("github-copilot", "claude-sonnet-4.6");
 				await expectResponseId(llm, { apiKey: githubCopilotToken });
 			},
 		);
@@ -114,7 +114,7 @@ describe("responseId E2E Tests", () => {
 
 	describe("OpenAI Codex Provider", () => {
 		it.skipIf(!openaiCodexToken)("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("openai-codex", "gpt-5.2-codex");
+			const llm = getModel("openai-codex", "gpt-5.5");
 			await expectResponseId(llm, { apiKey: openaiCodexToken });
 		});
 	});

@@ -1,10 +1,50 @@
-import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentMessage, AgentTool, ThinkingLevel } from "../index.js";
+import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "@earendil-works/pi-ai";
+import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
 import type { Session } from "./session/session.js";
 
-/** Model-visible skill loaded from a `SKILL.md` file or provided by an application. */
+/** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
+export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
+
+/** Create a successful {@link Result}. */
+export function ok<TValue, TError>(value: TValue): Result<TValue, TError> {
+	return { ok: true, value };
+}
+
+/** Create a failed {@link Result}. */
+export function err<TValue, TError>(error: TError): Result<TValue, TError> {
+	return { ok: false, error };
+}
+
+/** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
+export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
+	if (!result.ok) throw result.error;
+	return result.value;
+}
+
+/** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
+export function getOrUndefined<TValue extends object, TError>(result: Result<TValue, TError>): TValue | undefined {
+	return result.ok ? result.value : undefined;
+}
+
+/** Normalize unknown thrown values into Error instances before using them as typed error causes. */
+export function toError(error: unknown): Error {
+	if (error instanceof Error) return error;
+	if (typeof error === "string") return new Error(error);
+	try {
+		return new Error(JSON.stringify(error));
+	} catch {
+		return new Error(String(error));
+	}
+}
+
+/**
+ * Skill loaded from a `SKILL.md` file or provided by an application.
+ *
+ * `name`, `description`, and `filePath` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
+ * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
+ */
 export interface Skill {
-	/** Skill command name. */
+	/** Stable skill name used for lookup and model-visible listings. */
 	name: string;
 	/** Short model-visible description of when to use the skill. */
 	description: string;
@@ -16,29 +56,60 @@ export interface Skill {
 	disableModelInvocation?: boolean;
 }
 
-/** Prompt template that can expand slash-command text before a prompt is sent. */
+/** Prompt template that can be formatted into a prompt for explicit invocation. */
 export interface PromptTemplate {
-	/** Slash-command name without the leading `/`. */
+	/** Stable template name used for lookup or application command routing. */
 	name: string;
 	/** Optional description for command lists or autocomplete. */
 	description?: string;
-	/** Template content. Argument placeholders are expanded by `expandPromptTemplate`. */
+	/** Template content. Argument placeholders are formatted by `formatPromptTemplateInvocation`. */
 	content: string;
 }
 
-/** Resources made available to harness prompt expansion and system-prompt callbacks. */
-export interface AgentHarnessResources {
-	/** Prompt templates used to expand `/template args` input. */
-	promptTemplates?: PromptTemplate[];
+/** Resources made available to explicit invocation methods and system-prompt callbacks. */
+export interface AgentHarnessResources<
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+> {
+	/** Prompt templates available for explicit invocation. */
+	promptTemplates?: TPromptTemplate[];
 	/** Skills available to the model and explicit skill invocation. */
-	skills?: Skill[];
+	skills?: TSkill[];
 }
 
-/** Kind of filesystem object as addressed by an {@link ExecutionEnv}. Symlinks are not followed automatically. */
+/** Curated provider request options owned by the harness and snapshotted per turn. */
+export interface AgentHarnessStreamOptions {
+	/** Preferred transport forwarded to the stream function. */
+	transport?: Transport;
+	/** Provider request timeout in milliseconds. */
+	timeoutMs?: number;
+	/** Maximum provider retry attempts. */
+	maxRetries?: number;
+	/** Optional cap for provider-requested retry delays. */
+	maxRetryDelayMs?: number;
+	/** Additional request headers merged with auth and lifecycle headers. */
+	headers?: Record<string, string>;
+	/** Provider metadata forwarded with requests. */
+	metadata?: SimpleStreamOptions["metadata"];
+	/** Provider cache retention hint. */
+	cacheRetention?: SimpleStreamOptions["cacheRetention"];
+}
+
+/** Per-request stream option patch returned by provider hooks. */
+export interface AgentHarnessStreamOptionsPatch
+	extends Omit<Partial<AgentHarnessStreamOptions>, "headers" | "metadata"> {
+	/** Header patch. `undefined` values delete keys; explicit `headers: undefined` clears all headers. */
+	headers?: Record<string, string | undefined>;
+	/** Metadata patch. `undefined` values delete keys; explicit `metadata: undefined` clears all metadata. */
+	metadata?: Record<string, unknown | undefined>;
+}
+
+/** Kind of filesystem object as addressed by a {@link FileSystem}. Symlinks are not followed automatically. */
 export type FileKind = "file" | "directory" | "symlink";
 
-/** Stable, backend-independent file error codes thrown by {@link ExecutionEnv} file operations. */
+/** Stable, backend-independent file error codes returned by {@link FileSystem} file operations. */
 export type FileErrorCode =
+	| "aborted"
 	| "not_found"
 	| "permission_denied"
 	| "not_directory"
@@ -47,7 +118,7 @@ export type FileErrorCode =
 	| "not_supported"
 	| "unknown";
 
-/** Error thrown by {@link ExecutionEnv} file operations. */
+/** Error returned by {@link FileSystem} file operations. */
 export class FileError extends Error {
 	constructor(
 		/** Backend-independent error code. */
@@ -55,20 +126,118 @@ export class FileError extends Error {
 		message: string,
 		/** Absolute addressed path associated with the failure, when available. */
 		public path?: string,
-		options?: ErrorOptions,
+		cause?: Error,
 	) {
-		super(message, options);
+		super(message, cause === undefined ? undefined : { cause });
 		this.name = "FileError";
 	}
 }
 
-/** Metadata for one filesystem object in an {@link ExecutionEnv}. */
+/** Stable, backend-independent execution error codes returned by {@link ExecutionEnv.exec}. */
+export type ExecutionErrorCode =
+	| "aborted"
+	| "timeout"
+	| "shell_unavailable"
+	| "spawn_error"
+	| "callback_error"
+	| "unknown";
+
+/** Error returned by {@link ExecutionEnv.exec}. */
+export class ExecutionError extends Error {
+	constructor(
+		/** Backend-independent error code. */
+		public code: ExecutionErrorCode,
+		message: string,
+		cause?: Error,
+	) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "ExecutionError";
+	}
+}
+
+/** Stable compaction error codes returned by compaction helpers. */
+export type CompactionErrorCode = "aborted" | "summarization_failed" | "invalid_session" | "unknown";
+
+/** Error returned by compaction helpers. */
+export class CompactionError extends Error {
+	constructor(
+		/** Backend-independent error code. */
+		public code: CompactionErrorCode,
+		message: string,
+		cause?: Error,
+	) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "CompactionError";
+	}
+}
+
+/** Stable branch-summary error codes returned by branch summarization helpers. */
+export type BranchSummaryErrorCode = "aborted" | "summarization_failed" | "invalid_session";
+
+/** Error returned by branch summarization helpers. */
+export class BranchSummaryError extends Error {
+	constructor(
+		/** Backend-independent error code. */
+		public code: BranchSummaryErrorCode,
+		message: string,
+		cause?: Error,
+	) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "BranchSummaryError";
+	}
+}
+
+export type SessionErrorCode =
+	| "not_found"
+	| "invalid_session"
+	| "invalid_entry"
+	| "invalid_fork_target"
+	| "storage"
+	| "unknown";
+
+/** Error thrown by session storage, repositories, and session tree operations. */
+export class SessionError extends Error {
+	constructor(
+		/** Session subsystem error code. */
+		public code: SessionErrorCode,
+		message: string,
+		cause?: Error,
+	) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "SessionError";
+	}
+}
+
+export type AgentHarnessErrorCode =
+	| "busy"
+	| "invalid_state"
+	| "invalid_argument"
+	| "session"
+	| "hook"
+	| "auth"
+	| "compaction"
+	| "branch_summary"
+	| "unknown";
+
+/** Public AgentHarness failure with a stable top-level classification. */
+export class AgentHarnessError extends Error {
+	constructor(
+		public code: AgentHarnessErrorCode,
+		message: string,
+		cause?: Error,
+	) {
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "AgentHarnessError";
+	}
+}
+
+/** Metadata for one filesystem object in a {@link FileSystem}. */
 export interface FileInfo {
 	/** Basename of {@link path}. */
 	name: string;
 	/** Absolute, syntactically normalized addressed path in the execution environment. Symlinks are not followed. */
 	path: string;
-	/** Object kind. Symlink targets are not followed; use {@link ExecutionEnv.resolvePath} explicitly. */
+	/** Object kind. Symlink targets are not followed; use {@link FileSystem.canonicalPath} explicitly. */
 	kind: FileKind;
 	/** Size in bytes for the addressed filesystem object. */
 	size: number;
@@ -76,16 +245,16 @@ export interface FileInfo {
 	mtimeMs: number;
 }
 
-/** Options for {@link ExecutionEnv.exec}. */
+/** Options for {@link Shell.exec}. */
 export interface ExecutionEnvExecOptions {
-	/** Working directory for the command. Relative paths are resolved against {@link ExecutionEnv.cwd}. */
+	/** Working directory for the command. Relative paths are resolved against {@link ExecutionEnv.cwd}. Defaults to {@link ExecutionEnv.cwd}. */
 	cwd?: string;
-	/** Additional environment variables for the command. Values override the environment defaults. */
+	/** Additional environment variables for the command. Values override the environment defaults. Defaults to no overrides. */
 	env?: Record<string, string>;
-	/** Timeout in seconds. Implementations should reject when the command exceeds this duration. */
+	/** Timeout in seconds. Implementations should return a timeout error when the command exceeds this duration. Defaults to no timeout. */
 	timeout?: number;
-	/** Abort signal used to terminate the command. */
-	signal?: AbortSignal;
+	/** Abort signal used to terminate the command. Defaults to no abort signal. */
+	abortSignal?: AbortSignal;
 	/** Called with stdout chunks as they are produced. */
 	onStdout?: (chunk: string) => void;
 	/** Called with stderr chunks as they are produced. */
@@ -93,49 +262,79 @@ export interface ExecutionEnvExecOptions {
 }
 
 /**
- * Filesystem and process execution environment used by the harness.
+ * Filesystem capability used by the harness.
  *
- * Paths passed to methods may be absolute or relative to {@link cwd}. Paths returned by this interface are absolute
- * addressed paths in the environment, but are not canonicalized through symlinks unless returned by {@link resolvePath}.
+ * Paths passed to methods may be absolute or relative to {@link cwd}. Paths returned by file operations are addressed paths
+ * in the filesystem namespace, but are not canonicalized through symlinks unless returned by {@link canonicalPath}.
  *
- * File operations throw {@link FileError} for expected filesystem failures such as missing paths or permission errors.
+ * Operation methods must never throw or reject. All filesystem failures, including unexpected backend failures, must be
+ * encoded in the returned {@link Result}. Implementations must preserve this invariant.
  */
-export interface ExecutionEnv {
-	/** Current working directory for relative paths and command execution. */
+export interface FileSystem {
+	/** Current working directory for relative paths. */
 	cwd: string;
 
-	/** Execute a shell command in {@link cwd} unless `options.cwd` is provided. */
+	/** Return an absolute addressed path without requiring it to exist and without resolving symlinks. */
+	absolutePath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Join path segments in the filesystem namespace without requiring the result to exist. */
+	joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Read a UTF-8 text file. */
+	readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Read UTF-8 text lines. Implementations should stop once `maxLines` lines have been read. */
+	readTextLines(
+		path: string,
+		options?: { maxLines?: number; abortSignal?: AbortSignal },
+	): Promise<Result<string[], FileError>>;
+	/** Read a binary file. */
+	readBinaryFile(path: string, abortSignal?: AbortSignal): Promise<Result<Uint8Array, FileError>>;
+	/** Create or overwrite a file, creating parent directories when supported. */
+	writeFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	/** Create or append to a file, creating parent directories when supported. */
+	appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	/** Return metadata for the addressed path without following symlinks. */
+	fileInfo(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo, FileError>>;
+	/** List direct children of a directory without following symlinks. */
+	listDir(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo[], FileError>>;
+	/** Return the canonical path for an existing path, resolving symlinks where supported. */
+	canonicalPath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Return false for missing paths. Other errors, such as permission failures, return a {@link FileError}. */
+	exists(path: string, abortSignal?: AbortSignal): Promise<Result<boolean, FileError>>;
+	/** Create a directory. Defaults: `recursive: true`, no abort signal. */
+	createDir(
+		path: string,
+		options?: { recursive?: boolean; abortSignal?: AbortSignal },
+	): Promise<Result<void, FileError>>;
+	/** Remove a file or directory. Defaults: `recursive: false`, `force: false`, no abort signal. */
+	remove(
+		path: string,
+		options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal },
+	): Promise<Result<void, FileError>>;
+	/** Create a temporary directory and return its absolute path. Defaults: `prefix: "tmp-"`, no abort signal. */
+	createTempDir(prefix?: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Create a temporary file and return its absolute path. Defaults: `prefix: ""`, `suffix: ""`, no abort signal. */
+	createTempFile(options?: {
+		prefix?: string;
+		suffix?: string;
+		abortSignal?: AbortSignal;
+	}): Promise<Result<string, FileError>>;
+
+	/** Release filesystem resources. Must be best-effort and must not throw or reject. */
+	cleanup(): Promise<void>;
+}
+
+/** Shell execution capability used by the harness. */
+export interface Shell {
+	/** Execute a shell command in {@link FileSystem.cwd} unless `options.cwd` is provided. */
 	exec(
 		command: string,
 		options?: ExecutionEnvExecOptions,
-	): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-
-	/** Read a UTF-8 text file. Throws {@link FileError}. */
-	readTextFile(path: string): Promise<string>;
-	/** Read a binary file. Throws {@link FileError}. */
-	readBinaryFile(path: string): Promise<Uint8Array>;
-	/** Create or overwrite a file, creating parent directories when supported. Throws {@link FileError}. */
-	writeFile(path: string, content: string | Uint8Array): Promise<void>;
-	/** Return metadata for the addressed path without following symlinks. Throws {@link FileError}. */
-	fileInfo(path: string): Promise<FileInfo>;
-	/** List direct children of a directory without following symlinks. Throws {@link FileError}. */
-	listDir(path: string): Promise<FileInfo[]>;
-	/** Return the canonical path for a path, following symlinks. Throws {@link FileError}. */
-	realPath(path: string): Promise<string>;
-	/** Return false for missing paths. Other errors, such as permission failures, may throw {@link FileError}. */
-	exists(path: string): Promise<boolean>;
-	/** Create a directory. */
-	createDir(path: string, options?: { recursive?: boolean }): Promise<void>;
-	/** Remove a file or directory. */
-	remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
-	/** Create a temporary directory and return its absolute path. */
-	createTempDir(prefix?: string): Promise<string>;
-	/** Create a temporary file and return its absolute path. */
-	createTempFile(options?: { prefix?: string; suffix?: string }): Promise<string>;
-
-	/** Release resources owned by the environment. */
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>>;
+	/** Release shell resources. Must be best-effort and must not throw or reject. */
 	cleanup(): Promise<void>;
 }
+
+/** Filesystem and process execution environment used by the harness. */
+export interface ExecutionEnv extends FileSystem, Shell {}
 
 export interface SessionTreeEntryBase {
 	type: string;
@@ -202,6 +401,11 @@ export interface SessionInfoEntry extends SessionTreeEntryBase {
 	name?: string;
 }
 
+export interface LeafEntry extends SessionTreeEntryBase {
+	type: "leaf";
+	targetId: string | null;
+}
+
 export type SessionTreeEntry =
 	| MessageEntry
 	| ThinkingLevelChangeEntry
@@ -211,7 +415,8 @@ export type SessionTreeEntry =
 	| CustomEntry
 	| CustomMessageEntry
 	| LabelEntry
-	| SessionInfoEntry;
+	| SessionInfoEntry
+	| LeafEntry;
 
 export interface SessionContext {
 	messages: AgentMessage[];
@@ -233,6 +438,7 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;
+	/** Persist a leaf entry that records the active session-tree leaf. */
 	setLeafId(leafId: string | null): Promise<void>;
 	createEntryId(): Promise<string>;
 	appendEntry(entry: SessionTreeEntry): Promise<void>;
@@ -281,44 +487,13 @@ export interface JsonlSessionListOptions {
 export interface JsonlSessionRepoApi
 	extends SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
 
-export interface AgentHarnessPendingMutations {
-	appendMessages: AgentMessage[];
-	model?: Model<any>;
-	thinkingLevel?: ThinkingLevel;
-	activeToolNames?: string[];
-}
+export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
-export interface AgentHarnessConversationState {
-	session: Session;
-	model: Model<any>;
-	thinkingLevel: ThinkingLevel;
-	activeToolNames: string[];
-	nextTurnQueue: AgentMessage[];
-}
-
-export interface AgentHarnessOperationState {
-	idle: boolean;
-	liveOperationId?: string;
-	abortRequested: boolean;
-	steerQueue: AgentMessage[];
-	followUpQueue: AgentMessage[];
-	pendingMutations: AgentHarnessPendingMutations;
-}
-
-export interface SavePointSnapshot {
-	messages: AgentMessage[];
-	model: Model<any> | undefined;
-	thinkingLevel: ThinkingLevel;
-	activeToolNames: string[];
-	systemPrompt: string;
-}
-
-export interface AgentHarnessContext {
-	env: ExecutionEnv;
-	conversation: AgentHarnessConversationState;
-	operation: AgentHarnessOperationState;
-	abortSignal?: AbortSignal;
-}
+export type PendingSessionWrite = SessionTreeEntry extends infer TEntry
+	? TEntry extends SessionTreeEntry
+		? Omit<TEntry, "id" | "parentId" | "timestamp">
+		: never
+	: never;
 
 export interface QueueUpdateEvent {
 	type: "queue_update";
@@ -329,7 +504,6 @@ export interface QueueUpdateEvent {
 
 export interface SavePointEvent {
 	type: "save_point";
-	liveOperationId: string;
 	hadPendingMutations: boolean;
 }
 
@@ -344,12 +518,15 @@ export interface SettledEvent {
 	nextTurnCount: number;
 }
 
-export interface BeforeAgentStartEvent {
+export interface BeforeAgentStartEvent<
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+> {
 	type: "before_agent_start";
 	prompt: string;
 	images?: ImageContent[];
 	systemPrompt: string;
-	resources: AgentHarnessResources;
+	resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 }
 
 export interface ContextEvent {
@@ -359,6 +536,14 @@ export interface ContextEvent {
 
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
+	model: Model<any>;
+	sessionId: string;
+	streamOptions: AgentHarnessStreamOptions;
+}
+
+export interface BeforeProviderPayloadEvent {
+	type: "before_provider_payload";
+	model: Model<any>;
 	payload: unknown;
 }
 
@@ -426,14 +611,27 @@ export interface ThinkingLevelSelectEvent {
 	previousLevel: ThinkingLevel;
 }
 
-export type AgentHarnessOwnEvent =
+export interface ResourcesUpdateEvent<
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+> {
+	type: "resources_update";
+	resources: AgentHarnessResources<TSkill, TPromptTemplate>;
+	previousResources: AgentHarnessResources<TSkill, TPromptTemplate>;
+}
+
+export type AgentHarnessOwnEvent<
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+> =
 	| QueueUpdateEvent
 	| SavePointEvent
 	| AbortEvent
 	| SettledEvent
-	| BeforeAgentStartEvent
+	| BeforeAgentStartEvent<TSkill, TPromptTemplate>
 	| ContextEvent
 	| BeforeProviderRequestEvent
+	| BeforeProviderPayloadEvent
 	| AfterProviderResponseEvent
 	| ToolCallEvent
 	| ToolResultEvent
@@ -442,9 +640,12 @@ export type AgentHarnessOwnEvent =
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent
 	| ModelSelectEvent
-	| ThinkingLevelSelectEvent;
+	| ThinkingLevelSelectEvent
+	| ResourcesUpdateEvent<TSkill, TPromptTemplate>;
 
-export type AgentHarnessEvent = AgentEvent | AgentHarnessOwnEvent;
+export type AgentHarnessEvent<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> =
+	| AgentEvent
+	| AgentHarnessOwnEvent<TSkill, TPromptTemplate>;
 
 export interface BeforeAgentStartResult {
 	messages?: AgentMessage[];
@@ -456,6 +657,10 @@ export interface ContextResult {
 }
 
 export interface BeforeProviderRequestResult {
+	streamOptions?: AgentHarnessStreamOptionsPatch;
+}
+
+export interface BeforeProviderPayloadResult {
 	payload: unknown;
 }
 
@@ -488,6 +693,7 @@ export type AgentHarnessEventResultMap = {
 	before_agent_start: BeforeAgentStartResult | undefined;
 	context: ContextResult | undefined;
 	before_provider_request: BeforeProviderRequestResult | undefined;
+	before_provider_payload: BeforeProviderPayloadResult | undefined;
 	after_provider_response: undefined;
 	tool_call: ToolCallResult | undefined;
 	tool_result: ToolResultPatch | undefined;
@@ -497,6 +703,7 @@ export type AgentHarnessEventResultMap = {
 	session_tree: undefined;
 	model_select: undefined;
 	thinking_level_select: undefined;
+	resources_update: undefined;
 	queue_update: undefined;
 	save_point: undefined;
 	abort: undefined;
@@ -570,20 +777,24 @@ export interface GenerateBranchSummaryOptions {
 }
 
 export interface BranchSummaryResult {
-	summary?: string;
-	readFiles?: string[];
-	modifiedFiles?: string[];
-	aborted?: boolean;
-	error?: string;
+	summary: string;
+	readFiles: string[];
+	modifiedFiles: string[];
 }
 
-export interface AgentHarnessOptions {
+export interface AgentHarnessOptions<
+	TSkill extends Skill = Skill,
+	TPromptTemplate extends PromptTemplate = PromptTemplate,
+	TTool extends AgentTool = AgentTool,
+> {
 	env: ExecutionEnv;
 	session: Session;
-	tools?: AgentTool[];
-	resources?:
-		| AgentHarnessResources
-		| ((context: AgentHarnessContext) => AgentHarnessResources | Promise<AgentHarnessResources>);
+	tools?: TTool[];
+	/**
+	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
+	 * Applications own loading/reloading resources and should call `setResources()` with new values.
+	 */
+	resources?: AgentHarnessResources<TSkill, TPromptTemplate>;
 	systemPrompt?:
 		| string
 		| ((context: {
@@ -591,13 +802,19 @@ export interface AgentHarnessOptions {
 				session: Session;
 				model: Model<any>;
 				thinkingLevel: ThinkingLevel;
-				activeTools: AgentTool[];
-				resources: AgentHarnessResources;
+				activeTools: TTool[];
+				resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 		  }) => string | Promise<string>);
-	requestAuth?: (model: Model<any>) => Promise<{ apiKey: string; headers?: Record<string, string> } | undefined>;
+	getApiKeyAndHeaders?: (
+		model: Model<any>,
+	) => Promise<{ apiKey: string; headers?: Record<string, string> } | undefined>;
+	/** Curated stream/provider request options. Snapshotted at turn start. */
+	streamOptions?: AgentHarnessStreamOptions;
 	model: Model<any>;
 	thinkingLevel?: ThinkingLevel;
 	activeToolNames?: string[];
+	steeringMode?: QueueMode;
+	followUpMode?: QueueMode;
 }
 
 export type { AgentHarness } from "./agent-harness.js";

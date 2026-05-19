@@ -36,6 +36,14 @@ export type StreamFn = (
  */
 export type ToolExecutionMode = "sequential" | "parallel";
 
+/**
+ * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
+ *
+ * - "all": drain and inject every queued message at that point.
+ * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
+ */
+export type QueueMode = "all" | "one-at-a-time";
+
 /** A single tool call content block emitted by an assistant message. */
 export type AgentToolCall = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 
@@ -113,6 +121,18 @@ export interface ShouldStopAfterTurnContext {
 	newMessages: AgentMessage[];
 }
 
+/** Replacement runtime state used by the agent loop before starting another provider request. */
+export interface AgentLoopTurnUpdate {
+	/** Context for the next provider request. */
+	context?: AgentContext;
+	/** Model for the next provider request. */
+	model?: Model<any>;
+	/** Thinking level for the next provider request. */
+	thinkingLevel?: ThinkingLevel;
+}
+
+export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
@@ -187,6 +207,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.
 	 */
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
+
+	/**
+	 * Called after `turn_end` and before the loop decides whether another provider request should start.
+	 * Return replacement context/model/thinking state to affect the next turn in this run.
+	 * Return undefined to keep using the current context/config.
+	 */
+	prepareNextTurn?: (
+		context: PrepareNextTurnContext,
+	) => AgentLoopTurnUpdate | undefined | Promise<AgentLoopTurnUpdate | undefined>;
 
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.

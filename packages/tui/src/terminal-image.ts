@@ -43,6 +43,7 @@ export function detectCapabilities(): TerminalCapabilities {
 	const termProgram = process.env.TERM_PROGRAM?.toLowerCase() || "";
 	const term = process.env.TERM?.toLowerCase() || "";
 	const colorTerm = process.env.COLORTERM?.toLowerCase() || "";
+	const hasTrueColorHint = colorTerm === "truecolor" || colorTerm === "24bit";
 
 	// tmux and screen swallow OSC 8 by default (passthrough is opt-in and wraps
 	// sequences differently). Force hyperlinks off whenever we detect them, even
@@ -50,8 +51,7 @@ export function detectCapabilities(): TerminalCapabilities {
 	// also unreliable under tmux/screen, so leave `images: null` for safety.
 	const inTmuxOrScreen = !!process.env.TMUX || term.startsWith("tmux") || term.startsWith("screen");
 	if (inTmuxOrScreen) {
-		const trueColor = colorTerm === "truecolor" || colorTerm === "24bit";
-		return { images: null, trueColor, hyperlinks: false };
+		return { images: null, trueColor: hasTrueColorHint, hyperlinks: false };
 	}
 
 	if (process.env.KITTY_WINDOW_ID || termProgram === "kitty") {
@@ -82,8 +82,7 @@ export function detectCapabilities(): TerminalCapabilities {
 	// text" on terminals that swallow it, which means the URL disappears from
 	// the rendered output. Default to the legacy `text (url)` behavior unless we
 	// have positively identified a hyperlink-capable terminal above.
-	const trueColor = colorTerm === "truecolor" || colorTerm === "24bit";
-	return { images: null, trueColor, hyperlinks: false };
+	return { images: null, trueColor: hasTrueColorHint || !!process.env.WT_SESSION, hyperlinks: false };
 }
 
 export function getCapabilities(): TerminalCapabilities {
@@ -211,16 +210,43 @@ export function encodeITerm2(
 	return `\x1b]1337;File=${params.join(";")}:${base64Data}\x07`;
 }
 
+export interface ImageCellSize {
+	columns: number;
+	rows: number;
+}
+
+export function calculateImageCellSize(
+	imageDimensions: ImageDimensions,
+	maxWidthCells: number,
+	maxHeightCells?: number,
+	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
+): ImageCellSize {
+	const maxWidth = Math.max(1, Math.floor(maxWidthCells));
+	const maxHeight = maxHeightCells === undefined ? undefined : Math.max(1, Math.floor(maxHeightCells));
+	const imageWidth = Math.max(1, imageDimensions.widthPx);
+	const imageHeight = Math.max(1, imageDimensions.heightPx);
+
+	const widthScale = (maxWidth * cellDimensions.widthPx) / imageWidth;
+	const heightScale = maxHeight === undefined ? widthScale : (maxHeight * cellDimensions.heightPx) / imageHeight;
+	const scale = Math.min(widthScale, heightScale);
+
+	const scaledWidthPx = imageWidth * scale;
+	const scaledHeightPx = imageHeight * scale;
+	const columns = Math.ceil(scaledWidthPx / cellDimensions.widthPx);
+	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
+
+	return {
+		columns: Math.max(1, Math.min(maxWidth, columns)),
+		rows: Math.max(1, maxHeight === undefined ? rows : Math.min(maxHeight, rows)),
+	};
+}
+
 export function calculateImageRows(
 	imageDimensions: ImageDimensions,
 	targetWidthCells: number,
 	cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 },
 ): number {
-	const targetWidthPx = targetWidthCells * cellDimensions.widthPx;
-	const scale = targetWidthPx / imageDimensions.widthPx;
-	const scaledHeightPx = imageDimensions.heightPx * scale;
-	const rows = Math.ceil(scaledHeightPx / cellDimensions.heightPx);
-	return Math.max(1, rows);
+	return calculateImageCellSize(imageDimensions, targetWidthCells, undefined, cellDimensions).rows;
 }
 
 export function getPngDimensions(base64Data: string): ImageDimensions | null {
@@ -376,25 +402,25 @@ export function renderImage(
 	}
 
 	const maxWidth = options.maxWidthCells ?? 80;
-	const rows = calculateImageRows(imageDimensions, maxWidth, getCellDimensions());
+	const size = calculateImageCellSize(imageDimensions, maxWidth, options.maxHeightCells, getCellDimensions());
 
 	if (caps.images === "kitty") {
 		const sequence = encodeKitty(base64Data, {
-			columns: maxWidth,
-			rows,
+			columns: size.columns,
+			rows: size.rows,
 			imageId: options.imageId,
 			moveCursor: options.moveCursor,
 		});
-		return { sequence, rows, imageId: options.imageId };
+		return { sequence, rows: size.rows, imageId: options.imageId };
 	}
 
 	if (caps.images === "iterm2") {
 		const sequence = encodeITerm2(base64Data, {
-			width: maxWidth,
+			width: size.columns,
 			height: "auto",
 			preserveAspectRatio: options.preserveAspectRatio ?? true,
 		});
-		return { sequence, rows };
+		return { sequence, rows: size.rows };
 	}
 
 	return null;

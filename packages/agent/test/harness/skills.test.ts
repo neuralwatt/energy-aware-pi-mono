@@ -1,7 +1,7 @@
 import { symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { NodeExecutionEnv } from "../../src/harness/execution-env.js";
+import { NodeExecutionEnv } from "../../src/harness/env/nodejs.js";
 import { loadSkills, loadSourcedSkills } from "../../src/harness/skills.js";
 import { createTempDir } from "./session-test-utils.js";
 
@@ -93,6 +93,7 @@ Use this skill.
 		expect(diagnostics).toEqual([
 			{
 				type: "warning",
+				code: "invalid_metadata",
 				message: "description is required",
 				path: join(root, "user/broken/SKILL.md"),
 				source: { type: "user" },

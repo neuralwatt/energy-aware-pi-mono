@@ -5,6 +5,9 @@ export * from "./agent-loop.js";
 // Harness
 export * from "./harness/agent-harness.js";
 export {
+	type BranchPreparation,
+	type BranchSummaryDetails,
+	type CollectEntriesResult,
 	collectEntriesForBranchSummary,
 	generateBranchSummary,
 	prepareBranchEntries,
@@ -23,14 +26,13 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.js";
-export * from "./harness/execution-env.js";
-export * from "./harness/factory.js";
 export * from "./harness/messages.js";
 export * from "./harness/prompt-templates.js";
-export * from "./harness/session/repo/jsonl.js";
-export * from "./harness/session/repo/memory.js";
-export * from "./harness/session/repo/shared.js";
+export * from "./harness/session/jsonl-repo.js";
+export * from "./harness/session/memory-repo.js";
+export * from "./harness/session/repo-utils.js";
 export * from "./harness/session/session.js";
+export { uuidv7 } from "./harness/session/uuid.js";
 export * from "./harness/skills.js";
 export * from "./harness/system-prompt.js";
 export * from "./harness/types.js";

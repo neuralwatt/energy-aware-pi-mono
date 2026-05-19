@@ -40,6 +40,7 @@ import {
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -254,7 +255,29 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 					const errorText = await response.text();
 					if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-						const delayMs = BASE_DELAY_MS * 2 ** attempt;
+						let delayMs = BASE_DELAY_MS * 2 ** attempt;
+
+						const retryAfterMs = response.headers.get("retry-after-ms");
+						if (retryAfterMs !== null) {
+							const millis = Number(retryAfterMs);
+							if (Number.isFinite(millis)) {
+								delayMs = Math.max(0, millis);
+							}
+						} else {
+							const retryAfter = response.headers.get("retry-after");
+							if (retryAfter) {
+								const seconds = Number(retryAfter);
+								if (Number.isFinite(seconds)) {
+									delayMs = Math.max(0, seconds * 1000);
+								} else {
+									const date = Date.parse(retryAfter);
+									if (!Number.isNaN(date)) {
+										delayMs = Math.max(0, date - Date.now());
+									}
+								}
+							}
+						}
+
 						await sleep(delayMs, options?.signal);
 						continue;
 					}
@@ -356,7 +379,7 @@ function buildRequestBody(
 		input: messages,
 		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
-		prompt_cache_key: options?.sessionId,
+		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
 		tool_choice: "auto",
 		parallel_tool_calls: true,
 	};
@@ -711,7 +734,35 @@ type WebSocketConstructor = new (
 	protocols?: string | string[] | { headers?: Record<string, string> },
 ) => WebSocketLike;
 
-function getWebSocketConstructor(): WebSocketConstructor | null {
+let _cachedWebsocket: WebSocketConstructor | null = null;
+async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
+	if (_cachedWebsocket) return _cachedWebsocket;
+
+	// bun doesn't respect http proxy envs, ref: https://github.com/oven-sh/bun/issues/15489
+	// TODO: remove this when bun supports proxy envs in websocket.
+	if (
+		process?.versions?.bun &&
+		(process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy)
+	) {
+		const m = await dynamicImport("proxy-from-env");
+		const getProxyForUrl = (m as { getProxyForUrl: (url: string | object | URL) => string }).getProxyForUrl;
+
+		_cachedWebsocket = class extends WebSocket {
+			constructor(url: string | URL, options?: string | string[] | Record<string, unknown>) {
+				let _opts: Record<string, unknown> = {};
+				if (Array.isArray(options) || typeof options === "string") {
+					_opts = { protocols: options };
+				} else {
+					_opts = { ...options };
+				}
+
+				const proxy = getProxyForUrl(url.toString().replace(/^wss:/, "https:").replace(/^ws:/, "http:"));
+				super(url, { ..._opts, ...(proxy ? { proxy } : {}) } as any);
+			}
+		};
+		return _cachedWebsocket;
+	}
+
 	const ctor = (globalThis as { WebSocket?: unknown }).WebSocket;
 	if (typeof ctor !== "function") return null;
 	return ctor as unknown as WebSocketConstructor;
@@ -760,7 +811,7 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
 }
 
 async function connectWebSocket(url: string, headers: Headers, signal?: AbortSignal): Promise<WebSocketLike> {
-	const WebSocketCtor = getWebSocketConstructor();
+	const WebSocketCtor = await getWebSocketConstructor();
 	if (!WebSocketCtor) {
 		throw new Error("WebSocket transport is not available in this runtime");
 	}

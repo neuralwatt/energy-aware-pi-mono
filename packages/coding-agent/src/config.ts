@@ -1,9 +1,8 @@
-import { spawnSync } from "child_process";
 import { accessSync, constants, existsSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
-import { shouldUseWindowsShell } from "./utils/child-process.js";
+import { spawnProcessSync } from "./utils/child-process.js";
 
 // =============================================================================
 // Package Detection
@@ -151,10 +150,9 @@ function readCommandOutput(
 	args: string[],
 	options: { requireSuccess?: boolean } = {},
 ): string | undefined {
-	const result = spawnSync(command, args, {
+	const result = spawnProcessSync(command, args, {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
-		shell: shouldUseWindowsShell(command),
 	});
 	if (result.status === 0) return result.stdout.trim() || undefined;
 	if (options.requireSuccess) {
@@ -207,21 +205,46 @@ function getGlobalPackageRoots(method: InstallMethod, _packageName: string, npmC
 	}
 }
 
-function normalizeExistingPathForComparison(path: string): string | undefined {
+function normalizeExistingPathForComparison(path: string, resolveSymlinks: boolean): string | undefined {
 	const resolvedPath = resolve(path);
 	if (!existsSync(resolvedPath)) {
 		return undefined;
 	}
-	let normalizedPath: string;
-	try {
-		normalizedPath = realpathSync(resolvedPath);
-	} catch {
-		return undefined;
+	let normalizedPath = resolvedPath;
+	if (resolveSymlinks) {
+		try {
+			normalizedPath = realpathSync(resolvedPath);
+		} catch {
+			return undefined;
+		}
 	}
 	if (process.platform === "win32") {
 		normalizedPath = normalizedPath.toLowerCase();
 	}
 	return normalizedPath;
+}
+
+function getPathComparisonCandidates(path: string): string[] {
+	return Array.from(
+		new Set(
+			[normalizeExistingPathForComparison(path, false), normalizeExistingPathForComparison(path, true)].filter(
+				(candidate): candidate is string => !!candidate,
+			),
+		),
+	);
+}
+
+function getEntrypointPackageDir(): string | undefined {
+	const entrypoint = process.argv[1];
+	if (!entrypoint) return undefined;
+	let dir = dirname(entrypoint);
+	while (dir !== dirname(dir)) {
+		if (existsSync(join(dir, "package.json"))) {
+			return dir;
+		}
+		dir = dirname(dir);
+	}
+	return undefined;
 }
 
 function isSelfUpdatePathWritable(): boolean {
@@ -236,17 +259,14 @@ function isSelfUpdatePathWritable(): boolean {
 }
 
 function isManagedByGlobalPackageManager(method: InstallMethod, packageName: string, npmCommand?: string[]): boolean {
-	const packageDir = normalizeExistingPathForComparison(getPackageDir());
-	return (
-		!!packageDir &&
-		getGlobalPackageRoots(method, packageName, npmCommand).some((root) => {
-			const normalizedRoot = normalizeExistingPathForComparison(root);
-			return (
-				!!normalizedRoot &&
-				packageDir.startsWith(normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`)
-			);
-		})
-	);
+	const packageDirs = [getPackageDir(), getEntrypointPackageDir()].filter((dir): dir is string => !!dir);
+	const packageDirCandidates = packageDirs.flatMap((dir) => getPathComparisonCandidates(dir));
+	return getGlobalPackageRoots(method, packageName, npmCommand).some((root) => {
+		return getPathComparisonCandidates(root).some((normalizedRoot) => {
+			const rootPrefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
+			return packageDirCandidates.some((packageDir) => packageDir.startsWith(rootPrefix));
+		});
+	});
 }
 
 export function getSelfUpdateCommand(

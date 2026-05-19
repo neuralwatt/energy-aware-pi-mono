@@ -1,8 +1,9 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
+import { convertMessages } from "../src/providers/openai-completions.js";
 import { streamSimple } from "../src/stream.js";
-import type { Tool } from "../src/types.js";
+import type { AssistantMessage, Model, Tool, ToolResultMessage } from "../src/types.js";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -441,6 +442,38 @@ describe("openai-completions tool_choice", () => {
 		expect(response.content).toEqual([{ type: "text", text: "OK" }]);
 	});
 
+	it("errors when a stream ends after only null finish_reason chunks", async () => {
+		mockState.chunks = [
+			{
+				id: "chatcmpl-truncated",
+				choices: [{ delta: { content: "partial answer" }, finish_reason: null }],
+			},
+			{
+				id: "chatcmpl-truncated",
+				choices: [{ delta: { content: "partial answer" }, finish_reason: null }],
+			},
+		];
+
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		const response = await streamSimple(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: "Reply with a longer sentence",
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		expect(response.stopReason).toBe("error");
+		expect(response.errorMessage).toBe("Stream ended without finish_reason");
+	});
+
 	it("coalesces tool call deltas by stable index when provider mutates ids mid-stream", async () => {
 		mockState.chunks = [
 			{
@@ -784,6 +817,184 @@ describe("openai-completions tool_choice", () => {
 		expect(writeCall).not.toHaveProperty("partialArgs");
 	});
 
+	it("stores Xiaomi MiMo reasoning replay compat in built-in metadata", () => {
+		const providers = ["xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp"] as const;
+
+		for (const provider of providers) {
+			const model = getModel(provider, "mimo-v2.5-pro")!;
+			expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+			expect(model.compat?.thinkingFormat).toBe("deepseek");
+			expect(model.compat?.maxTokensField).toBeUndefined();
+			expect(model.compat?.supportsDeveloperRole).toBeUndefined();
+		}
+	});
+
+	it("replays Xiaomi MiMo assistant tool calls with empty reasoning_content when thinking is missing", async () => {
+		const model = getModel("xiaomi", "mimo-v2.5-pro")!;
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			api: "openai-completions",
+			provider: "xiaomi",
+			model: "mimo-v2.5-pro",
+			content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call_1",
+			toolName: "read",
+			content: [{ type: "text", text: "contents" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Read README.md", timestamp: Date.now() },
+					assistantMessage,
+					toolResult,
+				],
+			},
+			{
+				apiKey: "test",
+				reasoning: "high",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as {
+			messages?: Array<Record<string, unknown>>;
+			thinking?: { type?: string };
+			reasoning_effort?: string;
+		};
+		const replayedAssistant = params.messages?.find((message) => message.role === "assistant");
+		expect(replayedAssistant).toMatchObject({ role: "assistant", reasoning_content: "" });
+		expect(params.thinking).toEqual({ type: "enabled" });
+		expect(params.reasoning_effort).toBe("high");
+	});
+
+	it("normalizes OpenCode Go reasoning deltas to reasoning_content for replay", async () => {
+		mockState.chunks = [
+			{
+				id: "chatcmpl-opencode-go-reasoning",
+				choices: [{ delta: { reasoning: "think" }, finish_reason: "stop" }],
+			},
+		];
+
+		const { compat: _compat, ...baseModel } = getModel("opencode-go", "kimi-k2.6")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		const response = await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Use reasoning.", timestamp: Date.now() }],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		expect(response.content).toEqual([
+			{
+				type: "thinking",
+				thinking: "think",
+				thinkingSignature: "reasoning_content",
+			},
+		]);
+	});
+
+	it("keeps non-OpenCode Go reasoning deltas on the original reasoning field", async () => {
+		mockState.chunks = [
+			{
+				id: "chatcmpl-reasoning",
+				choices: [{ delta: { reasoning: "think" }, finish_reason: "stop" }],
+			},
+		];
+
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		const response = await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Use reasoning.", timestamp: Date.now() }],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		expect(response.content).toEqual([
+			{
+				type: "thinking",
+				thinking: "think",
+				thinkingSignature: "reasoning",
+			},
+		]);
+	});
+
+	it("replays OpenCode Go reasoning thinking blocks as reasoning_content", () => {
+		const { compat: _compat, ...baseModel } = getModel("opencode-go", "kimi-k2.6")!;
+		const model = { ...baseModel, api: "openai-completions" } as Model<"openai-completions">;
+		const messages = convertMessages(
+			model,
+			{
+				messages: [
+					{
+						role: "assistant",
+						api: "openai-completions",
+						provider: "opencode-go",
+						model: "kimi-k2.6",
+						content: [
+							{ type: "thinking", thinking: "think", thinkingSignature: "reasoning" },
+							{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+						],
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				...model.compat,
+				supportsStore: false,
+				supportsDeveloperRole: false,
+				supportsReasoningEffort: true,
+				supportsUsageInStreaming: true,
+				maxTokensField: "max_completion_tokens",
+				requiresToolResultName: false,
+				requiresAssistantAfterToolResult: false,
+				requiresThinkingAsText: false,
+				requiresReasoningContentOnAssistantMessages: false,
+				thinkingFormat: "openai",
+				openRouterRouting: {},
+				vercelGatewayRouting: {},
+				zaiToolStream: false,
+				supportsStrictMode: true,
+				sendSessionAffinityHeaders: false,
+				supportsLongCacheRetention: true,
+			},
+		);
+
+		expect(messages[0]).toMatchObject({ role: "assistant", reasoning_content: "think" });
+		expect(messages[0]).not.toHaveProperty("reasoning");
+	});
+
 	it("does not double-count reasoning tokens in completion usage", async () => {
 		mockState.chunks = [
 			{
@@ -819,7 +1030,7 @@ describe("openai-completions tool_choice", () => {
 		expect(response.usage.totalTokens).toBe(43);
 	});
 
-	it("preserves prompt_tokens_details.cache_write_tokens from chunk usage", async () => {
+	it("preserves prompt_tokens_details cache read/write fields from chunk usage", async () => {
 		mockState.chunks = [
 			{
 				id: "chatcmpl-cache-write",
@@ -853,13 +1064,14 @@ describe("openai-completions tool_choice", () => {
 			{ apiKey: "test" },
 		).result();
 
-		expect(response.usage.input).toBe(50);
-		expect(response.usage.cacheRead).toBe(20);
+		// cached_tokens is documented as cache reads; cache_write_tokens is separate.
+		expect(response.usage.input).toBe(20);
+		expect(response.usage.cacheRead).toBe(50);
 		expect(response.usage.cacheWrite).toBe(30);
 		expect(response.usage.totalTokens).toBe(105);
 	});
 
-	it("preserves prompt_tokens_details.cache_write_tokens from choice usage fallback", async () => {
+	it("preserves prompt_tokens_details cache read/write fields from choice usage fallback", async () => {
 		mockState.chunks = [
 			{
 				id: "chatcmpl-cache-write-choice",
@@ -898,8 +1110,9 @@ describe("openai-completions tool_choice", () => {
 			{ apiKey: "test" },
 		).result();
 
-		expect(response.usage.input).toBe(50);
-		expect(response.usage.cacheRead).toBe(20);
+		// cached_tokens is documented as cache reads; cache_write_tokens is separate.
+		expect(response.usage.input).toBe(20);
+		expect(response.usage.cacheRead).toBe(50);
 		expect(response.usage.cacheWrite).toBe(30);
 		expect(response.usage.totalTokens).toBe(105);
 	});

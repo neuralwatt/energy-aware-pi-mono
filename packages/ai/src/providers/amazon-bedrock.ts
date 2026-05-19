@@ -20,6 +20,7 @@ import {
 	type ToolConfiguration,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
 import { calculateCost } from "../models.js";
 import type {
@@ -42,6 +43,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -156,30 +158,15 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				};
 			}
 
-			if (
-				process.env.HTTP_PROXY ||
-				process.env.HTTPS_PROXY ||
-				process.env.NO_PROXY ||
-				process.env.http_proxy ||
-				process.env.https_proxy ||
-				process.env.no_proxy
-			) {
-				const nodeHttpHandler = await import("@smithy/node-http-handler");
-				const proxyAgent = await import("proxy-agent");
-
-				const agent = new proxyAgent.ProxyAgent();
-
+			const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
+			if (proxyAgents) {
 				// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
 				// on `http2` module and has no support for http agent.
-				// Use NodeHttpHandler to support http agent.
-				config.requestHandler = new nodeHttpHandler.NodeHttpHandler({
-					httpAgent: agent,
-					httpsAgent: agent,
-				});
+				// Use NodeHttpHandler to support HTTP(S) proxy agents.
+				config.requestHandler = new NodeHttpHandler(proxyAgents);
 			} else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
 				// Some custom endpoints require HTTP/1.1 instead of HTTP/2
-				const nodeHttpHandler = await import("@smithy/node-http-handler");
-				config.requestHandler = new nodeHttpHandler.NodeHttpHandler();
+				config.requestHandler = new NodeHttpHandler();
 			}
 		} else {
 			// Non-Node environment (browser): fall back to us-east-1 since
@@ -327,8 +314,10 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 			} satisfies BedrockOptions);
 		}
 
+		// Undefined means the caller did not request an output cap; let the helper use the model cap.
+		// Do not coerce to 0 here, or the thinking budget would become the entire maxTokens value.
 		const adjusted = adjustMaxTokensForThinking(
-			base.maxTokens || 0,
+			base.maxTokens,
 			model.maxTokens,
 			options.reasoning,
 			options.thinkingBudgets,
@@ -631,24 +620,31 @@ function convertMessages(
 		const m = transformedMessages[i];
 
 		switch (m.role) {
-			case "user":
+			case "user": {
+				const content: ContentBlock[] = [];
+				if (typeof m.content === "string") {
+					content.push({ text: sanitizeSurrogates(m.content) });
+				} else {
+					for (const c of m.content) {
+						switch (c.type) {
+							case "text":
+								content.push({ text: sanitizeSurrogates(c.text) });
+								break;
+							case "image":
+								content.push({ image: createImageBlock(c.mimeType, c.data) });
+								break;
+							default:
+								continue;
+						}
+					}
+				}
+				if (content.length === 0) continue;
 				result.push({
 					role: ConversationRole.USER,
-					content:
-						typeof m.content === "string"
-							? [{ text: sanitizeSurrogates(m.content) }]
-							: m.content.map((c) => {
-									switch (c.type) {
-										case "text":
-											return { text: sanitizeSurrogates(c.text) };
-										case "image":
-											return { image: createImageBlock(c.mimeType, c.data) };
-										default:
-											throw new Error("Unknown user content type");
-									}
-								}),
+					content,
 				});
 				break;
+			}
 			case "assistant": {
 				// Skip assistant messages with empty content (e.g., from aborted requests)
 				// Bedrock rejects messages with empty content arrays
@@ -699,7 +695,7 @@ function convertMessages(
 							}
 							break;
 						default:
-							throw new Error("Unknown assistant content type");
+							continue;
 					}
 				}
 				// Skip if all content blocks were filtered out
@@ -758,7 +754,7 @@ function convertMessages(
 				break;
 			}
 			default:
-				throw new Error("Unknown message role");
+				continue;
 		}
 	}
 

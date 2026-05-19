@@ -27,6 +27,7 @@ const ENV_KEYS = [
 	"GHOSTTY_RESOURCES_DIR",
 	"WEZTERM_PANE",
 	"ITERM_SESSION_ID",
+	"WT_SESSION",
 	"CMUX_WORKSPACE_ID",
 ] as const;
 
@@ -271,6 +272,31 @@ describe("detectCapabilities", () => {
 			assert.strictEqual(caps.hyperlinks, true);
 		});
 	});
+
+	it("detects truecolor for Windows Terminal outside multiplexers", () => {
+		withEnv({ WT_SESSION: "session", TERM: "xterm-256color" }, () => {
+			const caps = detectCapabilities();
+			assert.strictEqual(caps.trueColor, true);
+		});
+	});
+
+	it("does not inherit Windows Terminal truecolor through tmux", () => {
+		withEnv({ WT_SESSION: "session", TMUX: "/tmp/tmux-1000/default,1234,0", TERM: "tmux-256color" }, () => {
+			const caps = detectCapabilities();
+			assert.strictEqual(caps.trueColor, false);
+			assert.strictEqual(caps.hyperlinks, false);
+			assert.strictEqual(caps.images, null);
+		});
+	});
+
+	it("trusts explicit truecolor hints through tmux", () => {
+		withEnv({ COLORTERM: "truecolor", TMUX: "/tmp/tmux-1000/default,1234,0", TERM: "tmux-256color" }, () => {
+			const caps = detectCapabilities();
+			assert.strictEqual(caps.trueColor, true);
+			assert.strictEqual(caps.hyperlinks, false);
+			assert.strictEqual(caps.images, null);
+		});
+	});
 });
 
 describe("Kitty image cursor movement", () => {
@@ -312,7 +338,41 @@ describe("Kitty image cursor movement", () => {
 		}
 	});
 
-	it("restores the cursor to the reserved image row after Kitty rendering", () => {
+	it("honors maxHeightCells by reducing rendered width", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		try {
+			const result = renderImage("AAAA", { widthPx: 10, heightPx: 100 }, { maxWidthCells: 10, maxHeightCells: 5 });
+			assert.ok(result);
+			assert.strictEqual(result.rows, 5);
+			assert.ok(result.sequence.includes(",c=1,r=5"));
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("caps Image component height to a square pixel box by default", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 20 });
+		try {
+			const image = new Image(
+				"AAAA",
+				"image/png",
+				{ fallbackColor: (value) => value },
+				{ maxWidthCells: 10 },
+				{ widthPx: 10, heightPx: 100 },
+			);
+			const lines = image.render(12);
+			assert.strictEqual(lines.length, 5);
+			assert.ok(lines[0].includes(",c=1,r=5"));
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("places image sequence on first line with empty padding rows", () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		try {
@@ -326,11 +386,11 @@ describe("Kitty image cursor movement", () => {
 			const lines = image.render(4);
 			const imageId = image.getImageId();
 			assert.strictEqual(typeof imageId, "number");
-			assert.deepStrictEqual(lines.slice(0, -1), [""]);
-			assert.ok(lines[1].startsWith("\x1b[1A\x1b_G"));
-			assert.ok(lines[1].includes(",C=1,"));
-			assert.ok(lines[1].includes(`,i=${imageId}`));
-			assert.ok(lines[1].endsWith("\x1b[1B"));
+			assert.ok(lines[0].startsWith("\x1b_G"));
+			assert.ok(lines[0].includes(",C=1,"));
+			assert.ok(lines[0].includes(`,i=${imageId}`));
+			assert.ok(lines[0].endsWith("\x1b\\"));
+			assert.deepStrictEqual(lines.slice(1, lines.length), [""]);
 		} finally {
 			resetCapabilitiesCache();
 			setCellDimensions({ widthPx: 9, heightPx: 18 });

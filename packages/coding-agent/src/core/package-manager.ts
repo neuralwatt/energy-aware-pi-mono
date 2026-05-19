@@ -1,4 +1,4 @@
-import { type ChildProcess, type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
+import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -28,7 +28,7 @@ import { globSync } from "glob";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME } from "../config.js";
-import { shouldUseWindowsShell } from "../utils/child-process.js";
+import { spawnProcess, spawnProcessSync } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import { isStdoutTakenOver } from "./output-guard.js";
@@ -1084,7 +1084,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async shouldUpdateNpmSource(source: NpmSource, scope: InstalledSourceScope): Promise<boolean> {
-		const installedPath = this.getNpmInstallPath(source, scope);
+		const installedPath = this.getManagedNpmInstallPath(source, scope);
 		const installedVersion = existsSync(installedPath) ? this.getInstalledNpmVersion(installedPath) : undefined;
 		if (!installedVersion) {
 			return true;
@@ -1114,13 +1114,9 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async installNpmBatch(specs: string[], scope: InstalledSourceScope): Promise<void> {
-		if (scope === "user") {
-			await this.runNpmCommand(["install", "-g", ...specs]);
-			return;
-		}
 		const installRoot = this.getNpmInstallRoot(scope, false);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(["install", ...specs, "--prefix", installRoot]);
+		await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
 	}
 
 	async checkForAvailableUpdates(): Promise<PackageUpdate[]> {
@@ -1221,13 +1217,14 @@ export class DefaultPackageManager implements PackageManager {
 			};
 
 			if (parsed.type === "npm") {
-				const installedPath = this.getNpmInstallPath(parsed, scope);
+				let installedPath = this.getNpmInstallPath(parsed, scope);
 				const needsInstall =
 					!existsSync(installedPath) ||
 					(parsed.pinned && !(await this.installedNpmMatchesPinnedVersion(parsed, installedPath)));
 				if (needsInstall) {
 					const installed = await installMissing();
 					if (!installed) continue;
+					installedPath = this.getNpmInstallPath(parsed, scope);
 				}
 				metadata.baseDir = installedPath;
 				this.collectPackageResources(installedPath, accumulator, filter, metadata);
@@ -1668,6 +1665,14 @@ export class DefaultPackageManager implements PackageManager {
 		return { command, args };
 	}
 
+	private getPackageManagerName(): string {
+		const npmCommand = this.getNpmCommand();
+		const commandParts = [npmCommand.command, ...npmCommand.args];
+		const separatorIndex = commandParts.lastIndexOf("--");
+		const packageManagerCommand = separatorIndex >= 0 ? commandParts[separatorIndex + 1] : npmCommand.command;
+		return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
+	}
+
 	private async runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void> {
 		const npmCommand = this.getNpmCommand();
 		await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
@@ -1686,23 +1691,30 @@ export class DefaultPackageManager implements PackageManager {
 		return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
 	}
 
-	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
-		if (scope === "user" && !temporary) {
-			await this.runNpmCommand(["install", "-g", source.spec]);
-			return;
+	private getNpmInstallArgs(specs: string[], installRoot: string): string[] {
+		const packageManagerName = this.getPackageManagerName();
+		if (packageManagerName === "bun") {
+			return ["install", ...specs, "--cwd", installRoot];
 		}
+		if (packageManagerName === "pnpm") {
+			return ["install", ...specs, "--prefix", installRoot, "--config.strict-dep-builds=false"];
+		}
+		return ["install", ...specs, "--prefix", installRoot];
+	}
+
+	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, temporary);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(["install", source.spec, "--prefix", installRoot]);
+		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
 	}
 
 	private async uninstallNpm(source: NpmSource, scope: SourceScope): Promise<void> {
-		if (scope === "user") {
-			await this.runNpmCommand(["uninstall", "-g", source.name]);
-			return;
-		}
 		const installRoot = this.getNpmInstallRoot(scope, false);
 		if (!existsSync(installRoot)) {
+			return;
+		}
+		if (this.getPackageManagerName() === "bun") {
+			await this.runNpmCommand(["uninstall", source.name, "--cwd", installRoot]);
 			return;
 		}
 		await this.runNpmCommand(["uninstall", source.name, "--prefix", installRoot]);
@@ -1835,7 +1847,7 @@ export class DefaultPackageManager implements PackageManager {
 		if (scope === "project") {
 			return join(this.cwd, CONFIG_DIR_NAME, "npm");
 		}
-		return join(this.getGlobalNpmRoot(), "..");
+		return join(this.agentDir, "npm");
 	}
 
 	private getGlobalNpmRoot(): string {
@@ -1844,8 +1856,7 @@ export class DefaultPackageManager implements PackageManager {
 		if (this.globalNpmRoot && this.globalNpmRootCommandKey === commandKey) {
 			return this.globalNpmRoot;
 		}
-		const isBunPackageManager = npmCommand.command === "bun";
-		if (isBunPackageManager) {
+		if (this.getPackageManagerName() === "bun") {
 			const binDir = this.runNpmCommandSync(["pm", "bin", "-g"]).trim();
 			this.globalNpmRoot = join(dirname(binDir), "install", "global", "node_modules");
 		} else {
@@ -1855,14 +1866,45 @@ export class DefaultPackageManager implements PackageManager {
 		return this.globalNpmRoot;
 	}
 
-	private getNpmInstallPath(source: NpmSource, scope: SourceScope): string {
+	private getPnpmGlobalPackagePath(packageName: string): string | undefined {
+		if (this.getPackageManagerName() !== "pnpm") {
+			return undefined;
+		}
+
+		const output = this.runNpmCommandSync(["list", "-g", "--depth", "0", "--json"]);
+		const entries = JSON.parse(output) as Array<{ dependencies?: Record<string, { path?: string }> }>;
+		for (const entry of entries) {
+			const path = entry.dependencies?.[packageName]?.path;
+			if (path) return path;
+		}
+		return undefined;
+	}
+
+	private getManagedNpmInstallPath(source: NpmSource, scope: SourceScope): string {
 		if (scope === "temporary") {
 			return join(this.getTemporaryDir("npm"), "node_modules", source.name);
 		}
 		if (scope === "project") {
 			return join(this.cwd, CONFIG_DIR_NAME, "npm", "node_modules", source.name);
 		}
-		return join(this.getGlobalNpmRoot(), source.name);
+		return join(this.agentDir, "npm", "node_modules", source.name);
+	}
+
+	private getLegacyGlobalNpmInstallPath(source: NpmSource): string | undefined {
+		try {
+			return this.getPnpmGlobalPackagePath(source.name) ?? join(this.getGlobalNpmRoot(), source.name);
+		} catch {
+			return undefined;
+		}
+	}
+
+	private getNpmInstallPath(source: NpmSource, scope: SourceScope): string {
+		const managedPath = this.getManagedNpmInstallPath(source, scope);
+		if (scope !== "user" || existsSync(managedPath)) {
+			return managedPath;
+		}
+		const legacyPath = this.getLegacyGlobalNpmInstallPath(source);
+		return legacyPath && existsSync(legacyPath) ? legacyPath : managedPath;
 	}
 
 	private getGitInstallPath(source: GitSource, scope: SourceScope): string {
@@ -2366,11 +2408,11 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private spawnCommand(command: string, args: string[], options?: { cwd?: string }): ChildProcess {
-		return spawn(command, args, {
+		const env = getEnv();
+		return spawnProcess(command, args, {
 			cwd: options?.cwd,
 			stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
-			shell: shouldUseWindowsShell(command),
-			env: getEnv(),
+			env,
 		});
 	}
 
@@ -2380,11 +2422,11 @@ export class DefaultPackageManager implements PackageManager {
 		options?: { cwd?: string; env?: Record<string, string> },
 	): ChildProcessByStdio<null, Readable, Readable> {
 		const baseEnv = getEnv();
-		return spawn(command, args, {
+		const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
+		return spawnProcess(command, args, {
 			cwd: options?.cwd,
 			stdio: ["ignore", "pipe", "pipe"],
-			shell: shouldUseWindowsShell(command),
-			env: options?.env ? { ...baseEnv, ...options.env } : baseEnv,
+			env,
 		});
 	}
 
@@ -2447,11 +2489,11 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private runCommandSync(command: string, args: string[]): string {
-		const result = spawnSync(command, args, {
+		const env = getEnv();
+		const result = spawnProcessSync(command, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
-			shell: shouldUseWindowsShell(command),
-			env: getEnv(),
+			env,
 		});
 		if (result.error || result.status !== 0) {
 			throw new Error(
