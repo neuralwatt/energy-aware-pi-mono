@@ -1,9 +1,9 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../src/models.js";
-import { convertMessages } from "../src/providers/openai-completions.js";
-import { streamSimple } from "../src/stream.js";
-import type { AssistantMessage, Model, Tool, ToolResultMessage } from "../src/types.js";
+import { getModel } from "../src/models.ts";
+import { convertMessages } from "../src/providers/openai-completions.ts";
+import { stream, streamSimple } from "../src/stream.ts";
+import type { AssistantMessage, Model, Tool, ToolResultMessage } from "../src/types.ts";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -817,15 +817,95 @@ describe("openai-completions tool_choice", () => {
 		expect(writeCall).not.toHaveProperty("partialArgs");
 	});
 
+	it("uses system messages for non-OpenAI/Anthropic OpenRouter reasoning model instructions", async () => {
+		const model = getModel("openrouter", "deepseek/deepseek-v4-pro")!;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				systemPrompt: "Follow instructions.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = payload as { messages?: Array<{ role?: string }> };
+		expect(params.messages?.[0]?.role).toBe("system");
+	});
+
+	it("keeps developer messages for OpenAI and Anthropic OpenRouter reasoning model instructions", async () => {
+		for (const model of [
+			getModel("openrouter", "openai/gpt-5.2-codex"),
+			getModel("openrouter", "anthropic/claude-sonnet-4.5"),
+		]) {
+			expect(model).toBeDefined();
+			let payload: unknown;
+
+			await streamSimple(
+				model!,
+				{
+					systemPrompt: "Follow instructions.",
+					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				},
+				{
+					apiKey: "test",
+					onPayload: (params: unknown) => {
+						payload = params;
+					},
+				},
+			).result();
+
+			const params = payload as { messages?: Array<{ role?: string }> };
+			expect(params.messages?.[0]?.role).toBe("developer");
+		}
+	});
+
+	it("keeps developer messages for OpenAI reasoning model instructions", async () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-5.5")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				systemPrompt: "Follow instructions.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = payload as { messages?: Array<{ role?: string }> };
+		expect(params.messages?.[0]?.role).toBe("developer");
+	});
+
+	it("stores OpenRouter Kimi K2.6 reasoning replay compat in built-in metadata", () => {
+		for (const modelId of ["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.6:free"] as const) {
+			const model = getModel("openrouter", modelId)!;
+			expect((model.compat as any)?.supportsDeveloperRole).toBe(false);
+			expect((model.compat as any)?.requiresReasoningContentOnAssistantMessages).toBe(true);
+		}
+	});
+
 	it("stores Xiaomi MiMo reasoning replay compat in built-in metadata", () => {
 		const providers = ["xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp"] as const;
 
 		for (const provider of providers) {
 			const model = getModel(provider, "mimo-v2.5-pro")!;
-			expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+			expect((model.compat as any)?.requiresReasoningContentOnAssistantMessages).toBe(true);
 			expect(model.compat?.thinkingFormat).toBe("deepseek");
 			expect(model.compat?.maxTokensField).toBeUndefined();
-			expect(model.compat?.supportsDeveloperRole).toBeUndefined();
+			expect((model.compat as any)?.supportsDeveloperRole).toBeUndefined();
 		}
 	});
 
@@ -995,6 +1075,100 @@ describe("openai-completions tool_choice", () => {
 		expect(messages[0]).not.toHaveProperty("reasoning");
 	});
 
+	it("sends thinking disabled for OpenCode Go Kimi K2.6 when thinking is off", async () => {
+		const model = getModel("opencode-go", "kimi-k2.6")!;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
+		expect(params.thinking).toEqual({ type: "disabled" });
+		expect(params.reasoning_effort).toBeUndefined();
+	});
+
+	it("sends thinking enabled for OpenCode Go Kimi K2.6 when thinking is enabled", async () => {
+		const model = getModel("opencode-go", "kimi-k2.6")!;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				reasoning: "high",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
+		expect(params.thinking).toEqual({ type: "enabled" });
+		expect(params.reasoning_effort).toBeUndefined();
+	});
+
+	it("sends max_tokens for OpenCode completions models", async () => {
+		const cases = [getModel("opencode-go", "kimi-k2.6")!, getModel("opencode", "grok-build-0.1")!] as const;
+
+		for (const model of cases) {
+			let payload: unknown;
+			expect(model.compat?.maxTokensField).toBe("max_tokens");
+
+			await streamSimple(
+				model,
+				{
+					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				},
+				{
+					apiKey: "test",
+					maxTokens: 123,
+					onPayload: (params: unknown) => {
+						payload = params;
+					},
+				},
+			).result();
+
+			const params = (payload ?? mockState.lastParams) as { max_tokens?: number; max_completion_tokens?: number };
+			expect(params.max_tokens).toBe(123);
+			expect(params.max_completion_tokens).toBeUndefined();
+		}
+	});
+
+	it("omits reasoning effort for OpenCode Grok Build", async () => {
+		const model = getModel("opencode", "grok-build-0.1")!;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				reasoning: "high",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
+		expect(params.reasoning_effort).toBeUndefined();
+	});
+
 	it("does not double-count reasoning tokens in completion usage", async () => {
 		mockState.chunks = [
 			{
@@ -1147,5 +1321,96 @@ describe("openai-completions tool_choice", () => {
 		};
 		expect(params.reasoning).toEqual({ effort: "high" });
 		expect(params.reasoning_effort).toBeUndefined();
+	});
+
+	it("uses Ant Ling compatibility metadata", async () => {
+		const model = getModel("ant-ling", "Ring-2.6-1T")!;
+		let payload: unknown;
+
+		expect(model.compat).toMatchObject({
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: false,
+			maxTokensField: "max_tokens",
+			thinkingFormat: "ant-ling",
+			supportsLongCacheRetention: false,
+		});
+		expect(model.compat?.supportsStrictMode).toBeUndefined();
+		expect((model.compat as any)?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
+
+		await streamSimple(
+			model,
+			{
+				systemPrompt: "Follow instructions.",
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				maxTokens: 123,
+				reasoning: "high",
+				cacheRetention: "long",
+				sessionId: "ant-ling-session",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as {
+			max_tokens?: number;
+			max_completion_tokens?: number;
+			messages?: Array<{ role?: string }>;
+			reasoning?: { effort?: string };
+			reasoning_effort?: string;
+			store?: boolean;
+			prompt_cache_key?: string;
+			prompt_cache_retention?: string;
+		};
+		expect(params.max_tokens).toBe(123);
+		expect(params.max_completion_tokens).toBeUndefined();
+		expect(params.messages?.[0]?.role).toBe("system");
+		expect(params.reasoning).toEqual({ effort: "high" });
+		expect(params.reasoning_effort).toBeUndefined();
+		expect(params.store).toBeUndefined();
+		expect(params.prompt_cache_key).toBeUndefined();
+		expect(params.prompt_cache_retention).toBeUndefined();
+	});
+
+	it("omits Ant Ling reasoning for unmapped direct reasoning efforts and non-reasoning models", async () => {
+		const ring = getModel("ant-ling", "Ring-2.6-1T")!;
+		let payload: unknown;
+
+		await stream(
+			ring,
+			{
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				reasoningEffort: "medium",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
+
+		const ling = getModel("ant-ling", "Ling-2.6-flash")!;
+		await streamSimple(
+			ling,
+			{
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				reasoning: "high",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
 	});
 });

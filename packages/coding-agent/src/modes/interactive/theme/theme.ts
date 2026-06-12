@@ -10,10 +10,10 @@ import {
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { getCustomThemesDir, getThemesDir } from "../../../config.js";
-import type { SourceInfo } from "../../../core/source-info.js";
-import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
-import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
+import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
+import type { SourceInfo } from "../../../core/source-info.ts";
+import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
+import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
 
 // ============================================================================
 // Types & Schema
@@ -440,20 +440,7 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 }
 
 export function getAvailableThemes(): string[] {
-	const themes = new Set<string>(Object.keys(getBuiltinThemes()));
-	const customThemesDir = getCustomThemesDir();
-	if (fs.existsSync(customThemesDir)) {
-		const files = fs.readdirSync(customThemesDir);
-		for (const file of files) {
-			if (file.endsWith(".json")) {
-				themes.add(file.slice(0, -5));
-			}
-		}
-	}
-	for (const name of registeredThemes.keys()) {
-		themes.add(name);
-	}
-	return Array.from(themes).sort();
+	return getAvailableThemesWithPaths().map(({ name }) => name);
 }
 
 export interface ThemeInfo {
@@ -463,33 +450,56 @@ export interface ThemeInfo {
 
 export function getAvailableThemesWithPaths(): ThemeInfo[] {
 	const themesDir = getThemesDir();
-	const customThemesDir = getCustomThemesDir();
 	const result: ThemeInfo[] = [];
+	const seen = new Set<string>();
+	const addTheme = (themeInfo: ThemeInfo) => {
+		if (seen.has(themeInfo.name)) {
+			return;
+		}
+		seen.add(themeInfo.name);
+		result.push(themeInfo);
+	};
 
 	// Built-in themes
 	for (const name of Object.keys(getBuiltinThemes())) {
-		result.push({ name, path: path.join(themesDir, `${name}.json`) });
+		addTheme({ name, path: path.join(themesDir, `${name}.json`) });
 	}
 
 	// Custom themes
-	if (fs.existsSync(customThemesDir)) {
-		for (const file of fs.readdirSync(customThemesDir)) {
-			if (file.endsWith(".json")) {
-				const name = file.slice(0, -5);
-				if (!result.some((t) => t.name === name)) {
-					result.push({ name, path: path.join(customThemesDir, file) });
-				}
-			}
-		}
+	for (const themeInfo of getCustomThemeInfos()) {
+		addTheme(themeInfo);
 	}
 
 	for (const [name, theme] of registeredThemes.entries()) {
-		if (!result.some((t) => t.name === name)) {
-			result.push({ name, path: theme.sourcePath });
-		}
+		addTheme({ name, path: theme.sourcePath });
 	}
 
 	return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getCustomThemeInfos(): ThemeInfo[] {
+	const customThemesDir = getCustomThemesDir();
+	const result: ThemeInfo[] = [];
+	if (!fs.existsSync(customThemesDir)) {
+		return result;
+	}
+
+	for (const file of fs.readdirSync(customThemesDir)) {
+		if (!file.endsWith(".json")) {
+			continue;
+		}
+		const themePath = path.join(customThemesDir, file);
+		try {
+			const customTheme = loadThemeFromPath(themePath);
+			if (customTheme.name) {
+				result.push({ name: customTheme.name, path: themePath });
+			}
+		} catch {
+			// Invalid themes are ignored here; the resource loader reports them
+			// during normal startup/reload.
+		}
+	}
+	return result;
 }
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
@@ -1032,17 +1042,27 @@ function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 		built_in: (s: string) => t.fg("syntaxType", s),
 		literal: (s: string) => t.fg("syntaxNumber", s),
 		number: (s: string) => t.fg("syntaxNumber", s),
+		regexp: (s: string) => t.fg("syntaxString", s),
 		string: (s: string) => t.fg("syntaxString", s),
 		comment: (s: string) => t.fg("syntaxComment", s),
+		doctag: (s: string) => t.fg("syntaxComment", s),
+		meta: (s: string) => t.fg("muted", s),
 		function: (s: string) => t.fg("syntaxFunction", s),
 		title: (s: string) => t.fg("syntaxFunction", s),
 		class: (s: string) => t.fg("syntaxType", s),
 		type: (s: string) => t.fg("syntaxType", s),
+		tag: (s: string) => t.fg("syntaxPunctuation", s),
+		name: (s: string) => t.fg("syntaxKeyword", s),
 		attr: (s: string) => t.fg("syntaxVariable", s),
 		variable: (s: string) => t.fg("syntaxVariable", s),
 		params: (s: string) => t.fg("syntaxVariable", s),
 		operator: (s: string) => t.fg("syntaxOperator", s),
 		punctuation: (s: string) => t.fg("syntaxPunctuation", s),
+		emphasis: (s: string) => t.italic(s),
+		strong: (s: string) => t.bold(s),
+		link: (s: string) => t.underline(s),
+		addition: (s: string) => t.fg("toolDiffAdded", s),
+		deletion: (s: string) => t.fg("toolDiffRemoved", s),
 	};
 }
 

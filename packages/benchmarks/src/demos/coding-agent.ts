@@ -44,7 +44,7 @@ import {
 	type DiscriminatorTier,
 	discriminate,
 	type RoutingDecision,
-} from "./demo-discriminator.js";
+} from "./demo-discriminator.ts";
 import {
 	buildDiscriminatorContext,
 	type CodingMemory,
@@ -55,7 +55,7 @@ import {
 	loadMemory,
 	type PhaseRoutingStats,
 	saveMemory,
-} from "./demo-memory.js";
+} from "./demo-memory.ts";
 
 // -- Models -------------------------------------------------------------------
 

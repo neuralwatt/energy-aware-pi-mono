@@ -11,7 +11,7 @@ import {
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
-import type { PolicyContext, PolicyDecision, UsageWithEnergy } from "./policy/types.js";
+import type { PolicyContext, PolicyDecision, UsageWithEnergy } from "./policy/types.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -21,7 +21,7 @@ import type {
 	AgentToolCall,
 	AgentToolResult,
 	StreamFn,
-} from "./types.js";
+} from "./types.ts";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 

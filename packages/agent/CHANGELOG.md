@@ -2,31 +2,42 @@
 
 ## [Unreleased]
 
-### Added
+## [0.79.1] - 2026-06-09
 
-- Added `RuntimePolicy` interface with `beforeModelCall`/`afterModelCall` hooks for energy-aware budgeting
-- Added policy types: `PolicyContext`, `PolicyDecision`, `EnergyBudget`, `UsageWithEnergy`
-- Added `policy` field to `AgentLoopConfig` for optional runtime policy injection
-- Integrated policy hooks into agent loop: model/options overrides, abort support, energy tracking
-- Added `BaselinePolicy` — no-op policy for benchmarking that logs telemetry without intervention
-- Added `EnergyAwarePolicy` — budget-aware policy with 5-strategy chain: reasoning reduction, token limit reduction, model routing, context compaction, and budget exhaustion abort
-- Added `availableModels` and `budget` fields to `AgentLoopConfig` for policy-driven model routing and budget enforcement
-- Added `onCompact` callback to `AgentLoopConfig` — invoked when the policy sets `shouldCompact: true`, allowing callers (e.g. openclaw) to wire in their own context compaction logic
-- Added `policy`, `availableModels`, `budget`, and `onCompact` to `AgentOptions` and the `Agent` class, so callers using the high-level `Agent` API can configure energy-aware mode without dropping to the low-level `agentLoop()` function
-- Added runtime accessors on `Agent`: `policy`, `availableModels`, `budget` (get/set) for mid-session configuration changes
+## [0.79.0] - 2026-06-08
 
 ### Fixed
 
-- Fixed `AgentLoopConfig` fields `availableModels` and `budget` not being passed through to `PolicyContext` in the agent loop — previously both were hardcoded as empty, preventing `EnergyAwarePolicy` from triggering model routing or budget pressure in real runs
-- Fixed tool-call preflight to stop preparing sibling tool calls after the run is aborted ([#4276](https://github.com/earendil-works/pi/issues/4276)).
-- Fixed tail truncation for oversized single-line output that ends with a trailing newline ([#4715](https://github.com/earendil-works/pi/issues/4715)).
-- Fixed Windows Node execution environment command spawns to hide helper console windows from background processes ([#4699](https://github.com/earendil-works/pi/issues/4699)).
+- Fixed the compaction summarization system prompt to use neutral AI assistant wording for non-coding agents ([#5401](https://github.com/earendil-works/pi/issues/5401)).
 
-### Integration Notes (openclaw)
+## [0.78.1] - 2026-06-04
 
-- **Downstream consumers constructing `AssistantMessage` manually must include the optional `energy` field** to avoid silent data loss. Use `buildAssistantMessage()` from `@earendil-works/pi-ai` instead of object literals.
-- The `onCompact` callback replaces the previous silent ignore of `shouldCompact` — callers should wire this to their existing compaction mechanism.
+## [0.78.0] - 2026-05-29
 
+## [0.77.0] - 2026-05-28
+
+### Breaking Changes
+
+- Renamed agent harness `model_select` and `thinking_level_select` events to `model_update` and `thinking_level_update`.
+
+### Added
+
+- Added agent harness tool registry APIs, `tools_update` events, branch-scoped active-tool persistence, and duplicate tool validation.
+
+## [0.76.0] - 2026-05-27
+
+### Fixed
+
+- Fixed context token estimates to count user image attachments consistently with tool result images ([#4983](https://github.com/earendil-works/pi/issues/4983)).
+
+## [0.75.5] - 2026-05-23
+
+## [0.75.4] - 2026-05-20
+
+### Changed
+
+- Changed source syntax to avoid TypeScript constructs that require JavaScript emit, keeping the package compatible with Node.js strip-only TypeScript checks.
+- Removed the package-level development watch script now that the root TypeScript check validates strip-only-compatible sources.
 
 ### Fixed
 

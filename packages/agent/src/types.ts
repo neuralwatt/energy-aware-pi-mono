@@ -11,7 +11,7 @@ import type {
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
-import type { EnergyBudget, RuntimePolicy } from "./policy/types.js";
+import type { EnergyBudget, RuntimePolicy } from "./policy/types.ts";
 
 /**
  * Stream function used by the agent loop.

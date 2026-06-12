@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { getModel } from "../src/models.js";
-import type { EnergyUsage, Model } from "../src/types.js";
+import { getModel } from "../src/models.ts";
+import type { EnergyUsage, Model } from "../src/types.ts";
 
 /** Inline neuralwatt model fixture — not in the generated MODELS file. */
 const NW_GPT_OSS: Model<"openai-completions"> = {
@@ -72,7 +72,7 @@ describe("energy metrics parsing", () => {
 			duration_seconds: 1.5,
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const model = NW_GPT_OSS;
 		const response = await complete(
 			model,
@@ -100,7 +100,7 @@ describe("energy metrics parsing", () => {
 			energy_joules: 3600,
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const model = NW_GPT_OSS;
 		const response = await complete(
 			model,
@@ -128,7 +128,7 @@ describe("energy metrics parsing", () => {
 			energy_kwh: 0.001,
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const model = NW_GPT_OSS;
 		const response = await complete(
 			model,
@@ -155,7 +155,7 @@ describe("energy metrics parsing", () => {
 			completion_tokens_details: { reasoning_tokens: 0 },
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const model = NW_GPT_OSS;
 		const response = await complete(
 			model,
@@ -180,7 +180,7 @@ describe("energy metrics parsing", () => {
 			energy_kwh: null,
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const model = NW_GPT_OSS;
 		const response = await complete(
 			model,
@@ -203,7 +203,7 @@ describe("energy metrics parsing", () => {
 			completion_tokens_details: { reasoning_tokens: 0 },
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" as const };
 		const response = await complete(
@@ -232,7 +232,7 @@ describe("energy metrics parsing", () => {
 			duration_seconds: 0.8,
 		});
 
-		const { complete } = await import("../src/stream.js");
+		const { complete } = await import("../src/stream.ts");
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" as const };
 		const response = await complete(

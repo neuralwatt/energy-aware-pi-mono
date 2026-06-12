@@ -4,14 +4,14 @@ export type {
 	DiscriminatorTier,
 	DiscriminatorTierConfig,
 	RoutingDecision,
-} from "./demos/demo-discriminator.js";
+} from "./demos/demo-discriminator.ts";
 export {
 	DEFAULT_DISCRIMINATOR_SYSTEM_PROMPT,
 	discriminate,
-} from "./demos/demo-discriminator.js";
-export { buildReport, generateCsv, generateMarkdownReport, generateReport, writeCsv, writeReport } from "./report.js";
-export { computePressure, runSuite, runTask, writeTelemetryJsonl } from "./runner.js";
-export { BENCHMARK_TASKS, getTasksByGlob } from "./tasks.js";
+} from "./demos/demo-discriminator.ts";
+export { buildReport, generateCsv, generateMarkdownReport, generateReport, writeCsv, writeReport } from "./report.ts";
+export { computePressure, runSuite, runTask, writeTelemetryJsonl } from "./runner.ts";
+export { BENCHMARK_TASKS, getTasksByGlob } from "./tasks.ts";
 export type {
 	BenchmarkReport,
 	BenchmarkTask,
@@ -23,4 +23,4 @@ export type {
 	TaskComparison,
 	TaskResult,
 	TelemetryRecord,
-} from "./types.js";
+} from "./types.ts";

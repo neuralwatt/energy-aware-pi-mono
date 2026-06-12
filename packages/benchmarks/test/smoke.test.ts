@@ -1,8 +1,8 @@
 import type { RuntimePolicy } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { computePressure, runSuite, runTask } from "../src/runner.js";
-import type { BenchmarkTask, RunConfig } from "../src/types.js";
+import { computePressure, runSuite, runTask } from "../src/runner.ts";
+import type { BenchmarkTask, RunConfig } from "../src/types.ts";
 
 /** Reusable mock model for testing. */
 function createMockModel(overrides?: Partial<Model<Api>>): Model<Api> {

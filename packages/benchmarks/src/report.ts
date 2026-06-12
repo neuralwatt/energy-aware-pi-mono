@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { BenchmarkReport, TaskComparison, TaskResult } from "./types.js";
+import type { BenchmarkReport, TaskComparison, TaskResult } from "./types.ts";
 
 /**
  * Build a BenchmarkReport from paired baseline and energy-aware results.

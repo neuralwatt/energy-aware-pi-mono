@@ -9,7 +9,7 @@
  * - Multi-tool orchestration (1): complex agent workflow
  */
 
-import type { BenchmarkTask, MockTurnUsage } from "./types.js";
+import type { BenchmarkTask, MockTurnUsage } from "./types.ts";
 
 /** Default mock usage for a single-turn Q&A task. */
 const QA_USAGE: MockTurnUsage = {

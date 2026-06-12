@@ -1,4 +1,4 @@
-import type { EnergyUsage, Usage } from "./types.js";
+import type { EnergyUsage, Usage } from "./types.ts";
 
 /**
  * A single telemetry record emitted after each model call.

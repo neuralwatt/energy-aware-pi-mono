@@ -2,8 +2,8 @@
  * System prompt construction and project context loading
  */
 
-import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
-import { formatSkillsForPrompt, type Skill } from "./skills.js";
+import { getDocsPath, getExamplesPath, getReadmePath } from "../config.ts";
+import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -112,8 +112,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	// File exploration guidelines
 	if (hasBash && !hasGrep && !hasFind && !hasLs) {
 		addGuideline("Use bash for file operations like ls, rg, find");
-	} else if (hasBash && (hasGrep || hasFind || hasLs)) {
-		addGuideline("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
 	}
 
 	for (const guideline of promptGuidelines ?? []) {

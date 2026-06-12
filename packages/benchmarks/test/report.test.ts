@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildReport, generateCsv, generateMarkdownReport, generateReport } from "../src/report.js";
-import type { TaskResult } from "../src/types.js";
+import { buildReport, generateCsv, generateMarkdownReport, generateReport } from "../src/report.ts";
+import type { TaskResult } from "../src/types.ts";
 
 const FIXTURES_DIR = join(import.meta.dirname, "fixtures");
 

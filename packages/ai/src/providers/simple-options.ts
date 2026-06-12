@@ -1,4 +1,4 @@
-import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel } from "../types.js";
+import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel } from "../types.ts";
 
 export function buildBaseOptions(_model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
 	return {
@@ -13,6 +13,7 @@ export function buildBaseOptions(_model: Model<Api>, options?: SimpleStreamOptio
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
 		timeoutMs: options?.timeoutMs,
+		websocketConnectTimeoutMs: options?.websocketConnectTimeoutMs,
 		maxRetries: options?.maxRetries,
 		maxRetryDelayMs: options?.maxRetryDelayMs,
 		metadata: options?.metadata,

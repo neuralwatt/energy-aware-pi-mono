@@ -7,21 +7,22 @@ import {
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai";
-import { getAgentDir } from "../config.js";
-import { AgentSession } from "./agent-session.js";
-import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
-import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
-import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.js";
-import { convertToLlm } from "./messages.js";
-import { ModelRegistry } from "./model-registry.js";
-import { findInitialModel } from "./model-resolver.js";
-import type { ResourceLoader } from "./resource-loader.js";
-import { DefaultResourceLoader } from "./resource-loader.js";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
-import { isInstallTelemetryEnabled } from "./telemetry.js";
-import { time } from "./timings.js";
+import { getAgentDir } from "../config.ts";
+import { resolvePath } from "../utils/paths.ts";
+import { AgentSession } from "./agent-session.ts";
+import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
+import { AuthStorage } from "./auth-storage.ts";
+import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import { convertToLlm } from "./messages.ts";
+import { ModelRegistry } from "./model-registry.ts";
+import { findInitialModel } from "./model-resolver.ts";
+import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import type { ResourceLoader } from "./resource-loader.ts";
+import { DefaultResourceLoader } from "./resource-loader.ts";
+import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
+import { SettingsManager } from "./settings-manager.ts";
+import { time } from "./timings.ts";
 import {
 	createBashTool,
 	createCodingTools,
@@ -34,7 +35,7 @@ import {
 	createWriteTool,
 	type ToolName,
 	withFileMutationQueue,
-} from "./tools/index.js";
+} from "./tools/index.ts";
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -70,6 +71,8 @@ export interface CreateAgentSessionOptions {
 	 * When provided, only the listed tool names are enabled.
 	 */
 	tools?: string[];
+	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
+	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
 
@@ -108,7 +111,7 @@ export interface CreateAgentSessionResult {
 
 export type { EnergyBudget, RuntimePolicy } from "@earendil-works/pi-agent-core";
 export type { EnergyUsage } from "@earendil-works/pi-ai";
-export * from "./agent-session-runtime.js";
+export * from "./agent-session-runtime.ts";
 export type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -117,10 +120,10 @@ export type {
 	SlashCommandInfo,
 	SlashCommandSource,
 	ToolDefinition,
-} from "./extensions/index.js";
-export type { PromptTemplate } from "./prompt-templates.js";
-export type { Skill } from "./skills.js";
-export type { Tool } from "./tools/index.js";
+} from "./extensions/index.ts";
+export type { PromptTemplate } from "./prompt-templates.ts";
+export type { Skill } from "./skills.ts";
+export type { Tool } from "./tools/index.ts";
 
 export {
 	withFileMutationQueue,
@@ -140,36 +143,6 @@ export {
 
 function getDefaultAgentDir(): string {
 	return getAgentDir();
-}
-
-function getAttributionHeaders(
-	model: Model<any>,
-	settingsManager: SettingsManager,
-): Record<string, string> | undefined {
-	if (!isInstallTelemetryEnabled(settingsManager)) {
-		return undefined;
-	}
-
-	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
-		return {
-			"HTTP-Referer": "https://pi.dev",
-			"X-OpenRouter-Title": "pi",
-			"X-OpenRouter-Categories": "cli-agent",
-		};
-	}
-
-	if (
-		model.provider === "cloudflare-workers-ai" ||
-		model.provider === "cloudflare-ai-gateway" ||
-		model.baseUrl.includes("api.cloudflare.com") ||
-		model.baseUrl.includes("gateway.ai.cloudflare.com")
-	) {
-		return {
-			"User-Agent": "pi-coding-agent",
-		};
-	}
-
-	return undefined;
 }
 
 /**
@@ -208,8 +181,8 @@ function getAttributionHeaders(
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
-	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
-	const agentDir = options.agentDir ?? getDefaultAgentDir();
+	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
+	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
 	let resourceLoader = options.resourceLoader;
 
 	// Use provided or create AuthStorage and ModelRegistry
@@ -287,11 +260,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
-	const initialActiveToolNames: string[] = options.tools
-		? [...options.tools]
-		: options.noTools
-			? []
-			: defaultActiveToolNames;
+	const excludedToolNames = options.excludeTools;
+	const excludedToolNameSet = excludedToolNames ? new Set(excludedToolNames) : undefined;
+	const initialActiveToolNames: string[] = (
+		options.tools ? [...options.tools] : options.noTools ? [] : defaultActiveToolNames
+	).filter((name) => !excludedToolNameSet?.has(name));
 
 	let agent: Agent;
 
@@ -348,17 +321,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				throw new Error(auth.error);
 			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
-			const attributionHeaders = getAttributionHeaders(model, settingsManager);
+			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
+			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
+			// Use max int32 to effectively disable the timeout.
+			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
+			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
+			const websocketConnectTimeoutMs =
+				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			return streamSimple(model, context, {
 				...options,
 				apiKey: auth.apiKey,
-				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
+				timeoutMs,
+				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				headers:
-					attributionHeaders || auth.headers || options?.headers
-						? { ...attributionHeaders, ...auth.headers, ...options?.headers }
-						: undefined,
+				headers: mergeProviderAttributionHeaders(
+					model,
+					settingsManager,
+					options?.sessionId,
+					auth.headers,
+					options?.headers,
+				),
 			});
 		},
 		onPayload: async (payload, _model) => {
@@ -421,6 +404,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		initialActiveToolNames,
 		allowedToolNames,
+		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});

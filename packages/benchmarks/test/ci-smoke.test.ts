@@ -7,9 +7,9 @@
 import type { RuntimePolicy } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { runSuite, runTask } from "../src/runner.js";
-import { BENCHMARK_TASKS, getTasksByGlob } from "../src/tasks.js";
-import type { RunConfig, TaskResult } from "../src/types.js";
+import { runSuite, runTask } from "../src/runner.ts";
+import { BENCHMARK_TASKS, getTasksByGlob } from "../src/tasks.ts";
+import type { RunConfig, TaskResult } from "../src/types.ts";
 
 const MOCK_MODEL: Model<Api> = {
 	id: "moonshotai/Kimi-K2.5",
