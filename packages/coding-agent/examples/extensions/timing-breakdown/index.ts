@@ -399,6 +399,14 @@ export default function (pi: ExtensionAPI) {
 			`   ${t.turns.length} turn${t.turns.length !== 1 ? "s" : ""} │ ${t.tools.length} tool call${t.tools.length !== 1 ? "s" : ""} │ ${fmtTokens(totalInput)} in │ ${fmtTokens(totalOutput)} out │ ${outputTokPerSec > 0 ? `${outputTokPerSec} tok/s` : "—"} out`,
 		);
 
+		// LLM:tools ratio as a simplified fraction
+		const ratioA = Math.round(llmTime / 100);
+		const ratioB = Math.round(toolTime / 100);
+		const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+		const g = gcd(ratioA, ratioB) || 1;
+		const ratioStr = ratioB === 0 ? `${ratioA / g}:0` : `${ratioA / g}:${ratioB / g}`;
+		lines.push(`   ${ratioStr} LLM:tools`);
+
 		if (totalCacheRead > 0 || totalCacheWrite > 0) {
 			lines.push(
 				`   Cache: ${fmtTokens(totalCacheRead)} read (${cacheHitRate}% hit) │ ${fmtTokens(totalCacheWrite)} write`,
