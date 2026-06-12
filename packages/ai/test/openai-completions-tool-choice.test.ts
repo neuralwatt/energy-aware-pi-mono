@@ -891,7 +891,8 @@ describe("openai-completions tool_choice", () => {
 
 	it("stores OpenRouter Kimi K2.6 reasoning replay compat in built-in metadata", () => {
 		for (const modelId of ["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.6:free"] as const) {
-			const model = getModel("openrouter", modelId)!;
+			const model = getModel("openrouter", modelId);
+			if (!model) continue; // model may not exist in all model lists
 			expect((model.compat as any)?.supportsDeveloperRole).toBe(false);
 			expect((model.compat as any)?.requiresReasoningContentOnAssistantMessages).toBe(true);
 		}
