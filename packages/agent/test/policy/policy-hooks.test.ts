@@ -7,9 +7,9 @@ import {
 	type UserMessage,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { agentLoop } from "../../src/agent-loop.js";
-import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "../../src/policy/types.js";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "../../src/types.js";
+import { agentLoop } from "../../src/agent-loop.ts";
+import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "../../src/policy/types.ts";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "../../src/types.ts";
 
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {

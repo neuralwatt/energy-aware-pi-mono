@@ -1,14 +1,14 @@
 import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
-import type { AgentMessage, ThinkingLevel } from "../../types.js";
+import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
-} from "../messages.js";
-import { buildSessionContext } from "../session/session.js";
-import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
+} from "../messages.ts";
+import { buildSessionContext } from "../session/session.ts";
+import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -16,7 +16,7 @@ import {
 	type FileOperations,
 	formatFileOperations,
 	serializeConversation,
-} from "./utils.js";
+} from "./utils.ts";
 
 /** File-operation details stored on generated compaction entries. */
 export interface CompactionDetails {
@@ -198,22 +198,33 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 	return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const ESTIMATED_IMAGE_CHARS = 4800;
+
+function estimateTextAndImageContentChars(content: string | Array<{ type: string; text?: string }>): number {
+	if (typeof content === "string") {
+		return content.length;
+	}
+
+	let chars = 0;
+	for (const block of content) {
+		if (block.type === "text" && block.text) {
+			chars += block.text.length;
+		} else if (block.type === "image") {
+			chars += ESTIMATED_IMAGE_CHARS;
+		}
+	}
+	return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
 
 	switch (message.role) {
 		case "user": {
-			const content = (message as { content: string | Array<{ type: string; text?: string }> }).content;
-			if (typeof content === "string") {
-				chars = content.length;
-			} else if (Array.isArray(content)) {
-				for (const block of content) {
-					if (block.type === "text" && block.text) {
-						chars += block.text.length;
-					}
-				}
-			}
+			chars = estimateTextAndImageContentChars(
+				(message as { content: string | Array<{ type: string; text?: string }> }).content,
+			);
 			return Math.ceil(chars / 4);
 		}
 		case "assistant": {
@@ -231,18 +242,7 @@ export function estimateTokens(message: AgentMessage): number {
 		}
 		case "custom":
 		case "toolResult": {
-			if (typeof message.content === "string") {
-				chars = message.content.length;
-			} else {
-				for (const block of message.content) {
-					if (block.type === "text" && block.text) {
-						chars += block.text.length;
-					}
-					if (block.type === "image") {
-						chars += 4800;
-					}
-				}
-			}
+			chars = estimateTextAndImageContentChars(message.content);
 			return Math.ceil(chars / 4);
 		}
 		case "bashExecution": {
@@ -281,6 +281,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 			}
 			case "thinking_level_change":
 			case "model_change":
+			case "active_tools_change":
 			case "compaction":
 			case "branch_summary":
 			case "custom":
@@ -375,7 +376,7 @@ export function findCutPoint(
 	};
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
@@ -620,7 +621,7 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix.`;
 
-export { serializeConversation } from "./utils.js";
+export { serializeConversation } from "./utils.ts";
 
 /** Generate compaction summary data from prepared session history. */
 export async function compact(

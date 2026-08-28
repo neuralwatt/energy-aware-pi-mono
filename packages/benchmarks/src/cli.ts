@@ -1,9 +1,9 @@
 import { parseArgs } from "node:util";
 import { BaselinePolicy } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
-import { runSuite } from "./runner.js";
-import { getTasksByGlob } from "./tasks.js";
-import type { RunConfig } from "./types.js";
+import { runSuite } from "./runner.ts";
+import { getTasksByGlob } from "./tasks.ts";
+import type { RunConfig } from "./types.ts";
 
 /**
  * Neuralwatt model definitions from portal.neuralwatt.com (March 2026).

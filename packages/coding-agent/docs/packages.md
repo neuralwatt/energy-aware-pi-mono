@@ -28,8 +28,8 @@ pi install ./relative/path/to/package
 
 pi remove npm:@foo/bar
 pi list                     # show installed packages from settings
-pi update                   # update pi and all non-pinned packages
-pi update --extensions      # update all non-pinned packages only
+pi update                   # update pi, update packages, and reconcile pinned git refs
+pi update --extensions      # update packages and reconcile pinned git refs only
 pi update --self            # update pi only
 pi update --self --force    # reinstall pi even if current
 pi update npm:@foo/bar      # update one package
@@ -38,7 +38,7 @@ pi update --extension npm:@foo/bar
 
 These commands manage pi packages, not the pi CLI installation. To uninstall pi itself, see [Quickstart](quickstart.md#uninstall).
 
-By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team, and pi installs any missing packages automatically on startup.
+By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team, and pi installs any missing packages automatically on startup after the project is trusted.
 
 To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
 
@@ -85,9 +85,10 @@ ssh://git@github.com/user/repo@v1
 - HTTPS and SSH URLs are both supported.
 - SSH URLs use your configured SSH keys automatically (respects `~/.ssh/config`).
 - For non-interactive runs (for example CI), you can set `GIT_TERMINAL_PROMPT=0` to disable credential prompts and set `GIT_SSH_COMMAND` (for example `ssh -o BatchMode=yes -o ConnectTimeout=5`) to fail fast.
-- Refs pin the package and skip package updates (`pi update`, `pi update --extensions`).
+- Refs are pinned tags or commits. `pi update` and `pi update --extensions` do not move them to newer refs, but they do reconcile an existing clone to the configured ref.
+- Use `pi install git:host/user/repo@new-ref` to update settings and move an existing package to a new pinned ref.
 - Cloned to `~/.pi/agent/git/<host>/<path>` (global) or `.pi/git/<host>/<path>` (project).
-- Runs `npm install` after clone or pull if `package.json` exists.
+- When reconciliation changes the checkout, pi resets and cleans the clone, then runs `npm install` if `package.json` exists.
 
 **SSH examples:**
 ```bash

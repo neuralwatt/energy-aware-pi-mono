@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { TelemetryInput, TelemetryRecord } from "../src/energy-types.js";
+import type { TelemetryInput, TelemetryRecord } from "../src/energy-types.ts";
 import {
 	appendTelemetryLine,
 	buildTelemetryRecord,
 	parseTelemetryLines,
 	parseTelemetryRecord,
 	serializeTelemetryRecord,
-} from "../src/energy-types.js";
-import type { EnergyUsage, Usage } from "../src/types.js";
+} from "../src/energy-types.ts";
+import type { EnergyUsage, Usage } from "../src/types.ts";
 
 function makeUsage(overrides?: Partial<Usage>): Usage {
 	return {

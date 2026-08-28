@@ -1,6 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { type DiscriminatorConfig, discriminate } from "../src/demos/demo-discriminator.js";
+import { type DiscriminatorConfig, discriminate } from "../src/demos/demo-discriminator.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

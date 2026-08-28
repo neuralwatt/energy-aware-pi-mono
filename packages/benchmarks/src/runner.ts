@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PolicyContext, PolicyDecision, UsageWithEnergy } from "@earendil-works/pi-agent-core";
 import type { TelemetryRecord } from "@earendil-works/pi-ai";
-import type { BenchmarkTask, MockTurnUsage, PolicyDecisionLog, RunConfig, RunResult, TaskResult } from "./types.js";
+import type { BenchmarkTask, MockTurnUsage, PolicyDecisionLog, RunConfig, RunResult, TaskResult } from "./types.ts";
 
 const DEFAULT_TURN_USAGE: MockTurnUsage = {
 	input: 500,

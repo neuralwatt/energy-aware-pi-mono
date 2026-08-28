@@ -1,4 +1,4 @@
-import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "./types.js";
+import type { PolicyContext, PolicyDecision, RuntimePolicy, UsageWithEnergy } from "./types.ts";
 
 /**
  * BaselinePolicy: a no-op policy that observes telemetry but never intervenes.

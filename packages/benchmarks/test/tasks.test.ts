@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BENCHMARK_TASKS, getTasksByGlob } from "../src/tasks.js";
+import { BENCHMARK_TASKS, getTasksByGlob } from "../src/tasks.ts";
 
 describe("benchmark task suite", () => {
 	it("contains exactly 10 tasks", () => {

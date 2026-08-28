@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { getEnvApiKey } from "../src/env-api-keys.js";
-import { getModel, getModels, getProviders } from "../src/models.js";
-import type { Model } from "../src/types.js";
+import { getEnvApiKey } from "../src/env-api-keys.ts";
+import { getModel, getModels, getProviders } from "../src/models.ts";
+import type { Model } from "../src/types.ts";
 
 /**
  * Neuralwatt models are manually added to models.generated.ts and are NOT
@@ -112,7 +112,7 @@ describe("Neuralwatt provider configuration", () => {
 		"OpenAI-compatible streaming (integration)",
 		() => {
 			it("should complete a chat request through Neuralwatt endpoint", { timeout: 30000 }, async () => {
-				const { complete } = await import("../src/stream.js");
+				const { complete } = await import("../src/stream.ts");
 				const model = getModel("neuralwatt", "openai/gpt-oss-20b");
 				const response = await complete(model, {
 					systemPrompt: "You are a helpful assistant. Be concise.",

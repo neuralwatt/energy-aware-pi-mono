@@ -35,7 +35,7 @@ import {
 	type Model,
 	registerBuiltInApiProviders,
 } from "@earendil-works/pi-ai";
-import { type DiscriminatorConfig, discriminate } from "./demo-discriminator.js";
+import { type DiscriminatorConfig, discriminate } from "./demo-discriminator.ts";
 import {
 	clearMemory,
 	formatHNMemory,
@@ -43,7 +43,7 @@ import {
 	hnRoutingConfidence,
 	loadMemory,
 	saveMemory,
-} from "./demo-memory.js";
+} from "./demo-memory.ts";
 
 // -- Constants ----------------------------------------------------------------
 

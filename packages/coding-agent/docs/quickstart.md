@@ -7,8 +7,10 @@ This page gets you from install to a useful first pi session.
 Pi is distributed as an npm package:
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
+
+`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
 
 ### Uninstall
 
@@ -134,6 +136,7 @@ Sessions are saved automatically:
 ```bash
 pi -c                  # Continue most recent session
 pi -r                  # Browse previous sessions
+pi --name "my task"    # Set session display name at startup
 pi --session <path|id> # Open a specific session
 ```
 
